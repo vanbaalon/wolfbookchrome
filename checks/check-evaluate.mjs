@@ -122,6 +122,17 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     await wait(250);
   }
 
+  // Placement, not just presence: the run control belongs at the LEFT edge,
+  // ahead of In[n]:=, the way the notebook editor puts it.
+  if (runBtns.length) {
+    const row = runBtns[0].parentElement;
+    const label = row.querySelector('.wb-in-label');
+    say('the run button sits left of In[n]:=',
+        !!label && (runBtns[0].compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        runBtns[0].getBoundingClientRect().left <= (label ? label.getBoundingClientRect().left : 0)
+          ? 'left' : 'right');
+  }
+
   say('Run buttons appear when a local wolfbook is connected', runBtns.length > 0,
       runBtns.length + ' button(s)');
   if (!runBtns.length) {

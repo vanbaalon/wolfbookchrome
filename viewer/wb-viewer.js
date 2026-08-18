@@ -317,6 +317,7 @@ function attachRunner(cellEl, cellState, evaluator, doc, storedOutputs = []) {
   let busy = false;
   const run = async () => {
     if (busy) return null;
+    if (!String(cellState.code || '').trim()) return null;   // nothing to evaluate yet
     busy = true;
     btn.disabled = true;
     btn.classList.add('wb-run-busy');
@@ -840,9 +841,16 @@ export function renderNotebook(wb, container, opts = {}) {
     el.__wbState = cellState;      // lets "run above/below" locate this cell
 
     let runner = null;
-    if (evaluator && code.trim()) {
+    if (evaluator) {
+      // NOT `evaluator && code.trim()`. Whether a cell can be run was decided
+      // at RENDER time, so a cell inserted empty and then typed into never got
+      // a run handler at all — and Shift-Enter in it did nothing, silently,
+      // for the rest of the session. Emptiness is a question for the moment the
+      // button is pressed, not for the moment the cell is drawn.
       runner = attachRunner(el, cellState, evaluator, doc, outputEls);
-      input.appendChild(runner.btn);
+      // FIRST child: the run control belongs at the left edge, before In[n]:=,
+      // where the notebook editor puts it.
+      input.insertBefore(runner.btn, input.firstChild);
     }
     if (editing) attachEditing(el, input, pre, cellState, editing, doc, () => runner?.btn.click());
     if (structure) attachCellControls(el, cellState, structure, doc, true);

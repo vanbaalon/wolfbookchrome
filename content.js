@@ -1292,7 +1292,18 @@
         // Uploading over a doc would instead leave the project with a doc and a
         // file of the same name — the state Overleaf itself refuses to create.
         if (docBacked) {
-          const res = await askBridge('set-editor-doc', 4000, { text });
+          // Two independent guards, because writing into the wrong document is
+          // unrecoverable outside Overleaf's history:
+          //   * the tab must still name THIS file, and
+          //   * the editor must still hold exactly the bytes we read from it.
+          const openNow = probeSelectedFile();
+          if (openNow !== fileName) {
+            note.textContent = `the open file is now "${openNow || 'none'}" — nothing was written`;
+            holdMessage('Save cancelled', 6000);
+            saveBtn.disabled = false;
+            return;
+          }
+          const res = await askBridge('set-editor-doc', 4000, { text, expect: loadedSource });
           if (!res || !res.ok) {
             note.textContent = res?.error || 'could not write into the Overleaf editor';
             holdMessage('Save failed', 6000);
@@ -1759,8 +1770,14 @@
       if (inEditor) return;
 
       const cell = ev.target.closest && ev.target.closest('.wb-cell');
-      if (ev.key === 'Enter' && (ev.shiftKey || mod) && cell && cell.__wbRun) {
-        ev.preventDefault(); cell.__wbRun(); return;
+      if (ev.key === 'Enter' && (ev.shiftKey || mod) && cell) {
+        ev.preventDefault();
+        if (cell.__wbRun) { cell.__wbRun(); return; }
+        // Doing nothing at all is the worst answer: Shift-Enter is the most
+        // reflexive key in a notebook, and its silence reads as a broken panel
+        // rather than as "there is no kernel to run this on".
+        holdMessage('No kernel connected — start wolfbook-serve, or Open in Wolfbook', 6000);
+        return;
       }
       if (ev.key === 'Escape') { ev.target.blur?.(); return; }
     });

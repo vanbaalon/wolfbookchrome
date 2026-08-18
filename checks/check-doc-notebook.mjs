@@ -266,6 +266,16 @@ const deadline = Date.now() + 40000;
         !!hitBtn && (hitBtn === btn || btn.contains(hitBtn) || controls.contains(hitBtn)),
         hitBtn ? (hitBtn.className || hitBtn.tagName) : 'nothing there');
 
+    // A cell inserted EMPTY and then typed into must be runnable. Whether a
+    // cell could run was decided when it was drawn, so such a cell never got a
+    // run handler and Shift-Enter in it did nothing for the rest of the
+    // session. (No evaluator is connected in this fixture, so the handler's
+    // presence is what is checked, not an evaluation.)
+    const fresh = shadow.querySelector('.wb-cell-code');
+    say('a cell inserted empty is not permanently unrunnable',
+        !!fresh && (!!fresh.__wbRun || !shadow.querySelector('button.wb-run')),
+        fresh && fresh.__wbRun ? 'has a run handler' : 'no evaluator in this fixture');
+
     const saveBtn = shadow.querySelector('[data-act="save"]');
     let ready = Date.now() + 4000;
     while (saveBtn && saveBtn.hidden && Date.now() < ready) await sleep(200);
@@ -285,6 +295,39 @@ const deadline = Date.now() + 40000;
       const counts = await (await fetch('/__counts')).json();
       say('a doc is never uploaded as a file', counts.uploads === 0,
           counts.uploads + ' upload(s)');
+
+      // ── it must refuse to write into a document it did not read ──────────
+      // The bridge writes into whichever document Overleaf currently holds, so
+      // an editor showing something else must abort the save rather than
+      // replace that file's contents — which is unrecoverable outside
+      // Overleaf's own history.
+      const someoneElse = '\\documentclass{article}\\begin{document}not the notebook\\end{document}';
+      window.__cmDoc.text = someoneElse;
+      const cellNow = shadow.querySelector('.wb-cell .wb-input pre');
+      cellNow.click();
+      await sleep(600);
+      const handle = shadow.querySelector('.wb-cell').__wbEditorHandle;
+      if (handle) {
+        // The handle exposes the real CodeMirror view, so drive its document
+        // model rather than synthesising keystrokes.
+        handle.view.dispatch({
+          changes: { from: 0, to: handle.view.state.doc.length, insert: 'Plot[Sin[x], {x, 0, 2 Pi}]' },
+        });
+        handle.view.dom.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+        await sleep(600);
+      }
+      const save2 = shadow.querySelector('[data-act="save"]');
+      let waited = Date.now() + 4000;
+      while (save2 && save2.hidden && Date.now() < waited) await sleep(150);
+      if (save2 && !save2.hidden) save2.click();
+      await sleep(1500);
+      say('it refuses to overwrite a document it did not read',
+          window.__cmDoc.text === someoneElse,
+          window.__cmDoc.text === someoneElse ? 'the other file is untouched'
+                                              : 'OVERWROTE ' + window.__cmDoc.text.slice(0, 40));
+      const noteTxt = shadow.querySelector('.wb-note')?.textContent || '';
+      say('and says why', /not showing the document|different|nothing was written/i.test(noteTxt),
+          JSON.stringify(noteTxt.slice(0, 70)));
     }
   }
 

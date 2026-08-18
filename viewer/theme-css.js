@@ -368,7 +368,11 @@ export const THEME_CSS = `
 .wb-input { position: relative; }
 button.wb-run {
   flex: 0 0 auto;
+  /* The run control sits in the left gutter, ahead of In[n]:=, matching the
+     notebook editor. It reserves its width whether or not it is showing, so
+     revealing it on hover never shifts the code sideways. */
   align-self: flex-start;
+  margin-right: 2px;
   font: 11px/1 var(--vscode-font-family);
   border: 1px solid var(--wb-border);
   background: #fff;

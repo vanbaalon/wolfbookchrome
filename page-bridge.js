@@ -136,10 +136,29 @@
    * up and syncs it — no upload, no replaced file entity, and therefore none of
    * the re-selection dance the binary path needs.
    */
-  function setEditorDoc(text) {
+  function setEditorDoc(text, expect) {
     const content = document.querySelector('.cm-content');
     const view = content && content.cmView && content.cmView.view;
     if (!view) return { ok: false, error: 'no CodeMirror editor is open' };
+
+    // REFUSE UNLESS THE DOCUMENT IS THE ONE WE READ.
+    //
+    // This selector finds whichever document Overleaf currently has open — not
+    // necessarily the notebook. Writing blind therefore risks replacing the
+    // contents of a completely different file, which is unrecoverable except
+    // through Overleaf's history. So the caller states what it expects to find,
+    // and an exact match is the licence to overwrite: same bytes, same
+    // document. It doubles as the freshness check, since a collaborator editing
+    // the file meanwhile also fails the comparison.
+    const current = view.state.doc.toString();
+    if (typeof expect === 'string' && current !== expect) {
+      return {
+        ok: false,
+        mismatch: true,
+        error: 'the editor is not showing the document this notebook was read from '
+          + `(it holds ${current.length} bytes, expected ${expect.length}). Nothing was written.`,
+      };
+    }
     try {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text) } });
       return { ok: true, length: String(text).length };
@@ -162,7 +181,7 @@
       const { id, action, data } = ev.data;
       let payload = null;
       if (action === 'get-editor-doc') payload = { doc: getEditorDoc() };
-      else if (action === 'set-editor-doc') payload = setEditorDoc(data && data.text);
+      else if (action === 'set-editor-doc') payload = setEditorDoc(data && data.text, data && data.expect);
       else if (action === 'get-project-tree') {
         scanGlobals();
         payload = {
