@@ -308,11 +308,20 @@ export async function startServer(opts = {}) {
   if (opts.coalition !== false) coalition.start();
 
   // Record where we are, so the CLI can report status and stop us.
-  writeState({ token, port: boundPort, pid: process.pid, startedAt: new Date().toISOString() });
+  //
+  // NOT for an ephemeral port. A test server binds port 0, and recording that
+  // overwrote the running server's entry with a port nobody can reach and a pid
+  // that dies seconds later — so `wolfbook-serve status` reported the test, and
+  // the real server became undiscoverable. An ephemeral port is by definition
+  // not something another process can find, so writing it down is pure harm.
+  const recordState = Number(port) !== 0;
+  if (recordState) {
+    writeState({ token, port: boundPort, pid: process.pid, startedAt: new Date().toISOString() });
+  }
 
   const close = async () => {
     coalition.stop();
-    if (readState().pid === process.pid) writeState({ pid: null });
+    if (recordState && readState().pid === process.pid) writeState({ pid: null });
     for (const s of subscribers) { try { s.end(); } catch (_) {} }
     subscribers.clear();
     kernel.stop();

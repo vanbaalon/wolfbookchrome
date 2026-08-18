@@ -70,7 +70,13 @@ try {
     });
     return res.json();
   };
-  const textOf = (r) => (r.content || []).map((c) => c.text).join('\n');
+  // The reply is the PRIMARY's wire shape — {parts:[{kind,value}]} — not MCP
+  // content blocks. This check previously read `r.content`, which is what let a
+  // real regression through: the server answered in MCP shape, the primary read
+  // `r.parts`, found none, and every tool call reached the agent as an empty
+  // string. Read it exactly the way claude-mcp/server.js does.
+  const textOf = (r) => (r.parts || []).filter((p) => p.kind === 'text')
+    .map((p) => p.value).join('\n') || (r.error || '');
 
   // ── /invoke must not be reachable from a web page ────────────────────────
   const fromPage = await fetch(`${s.url}/invoke`, {
@@ -82,6 +88,11 @@ try {
 
   const status = await invoke('wolfbook_kernelStatus');
   say('the primary can invoke a tool', !status.isError, textOf(status).slice(0, 60));
+  // Pin the wire shape itself, not just that some text came back.
+  say('the reply speaks the primary\'s wire shape',
+      Array.isArray(status.parts) && status.parts.every((p) => p.kind && 'value' in p)
+      && status.content === undefined,
+      Object.keys(status).join('+'));
 
   const unknown = await invoke('wolfbook_debugCell');
   say('an unimplemented tool says so honestly',

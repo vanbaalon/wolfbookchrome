@@ -127,6 +127,27 @@
     }
   }
 
+  /**
+   * Replace the whole CodeMirror document.
+   *
+   * This is how a .wb that Overleaf holds as a DOC (anything created inside
+   * Overleaf rather than uploaded) is saved: dispatching a transaction is
+   * exactly what typing does, so Overleaf's own OT extension picks the change
+   * up and syncs it — no upload, no replaced file entity, and therefore none of
+   * the re-selection dance the binary path needs.
+   */
+  function setEditorDoc(text) {
+    const content = document.querySelector('.cm-content');
+    const view = content && content.cmView && content.cmView.view;
+    if (!view) return { ok: false, error: 'no CodeMirror editor is open' };
+    try {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text) } });
+      return { ok: true, length: String(text).length };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
   function getEditorDoc() {
     const content = document.querySelector('.cm-content');
     const view = content && content.cmView && content.cmView.view;
@@ -138,9 +159,10 @@
     if (ev.source !== window || !ev.data) return;
 
     if (ev.data.type === REQ) {
-      const { id, action } = ev.data;
+      const { id, action, data } = ev.data;
       let payload = null;
       if (action === 'get-editor-doc') payload = { doc: getEditorDoc() };
+      else if (action === 'set-editor-doc') payload = setEditorDoc(data && data.text);
       else if (action === 'get-project-tree') {
         scanGlobals();
         payload = {

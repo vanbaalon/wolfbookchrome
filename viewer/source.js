@@ -73,10 +73,19 @@ export function createSourceProvider(projectId, { askBridge } = {}) {
     async getSource(fileName, opts = {}) {
       // Freshest copy, when Overleaf opened the file in a real editor: this
       // reflects edits that have not been persisted yet.
-      if (opts.preferEditor && askBridge) {
+      //
+      // `docBacked` means the .wb IS the open document — Overleaf holds it as a
+      // doc rather than a binary file, which is what everything created inside
+      // Overleaf starts as. Then the editor is authoritative and an EMPTY
+      // buffer is a real answer: a brand-new notebook with no cells yet. The
+      // `{` guard is still right for the speculative case, where `.cm-content`
+      // may well belong to main.tex and its LaTeX must not be read as a .wb.
+      if ((opts.preferEditor || opts.docBacked) && askBridge) {
         const bridge = await askBridge('get-editor-doc');
         const doc = bridge && bridge.doc;
-        if (doc && doc.trimStart().startsWith('{')) return { source: doc, from: 'editor' };
+        if (typeof doc === 'string' && (opts.docBacked || doc.trimStart().startsWith('{'))) {
+          return { source: doc, from: 'editor' };
+        }
       }
 
       // The Download link's own href — exact, and far cheaper than the zip.

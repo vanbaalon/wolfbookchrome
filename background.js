@@ -293,9 +293,47 @@ async function connectRpc(onRequest) {
       }
     } catch (_) { /* stream dropped */ }
     if (rpcStream && rpcStream.abort === abort) rpcStream = null;
+    scheduleRpcReconnect();
   })();
 
   return rpcStream;
+}
+
+/**
+ * Come back after the server goes away.
+ *
+ * The notebook's presence in the coalition is the SSE stream — so restarting
+ * wolfbook-serve silently removed the open notebook from every agent's view,
+ * and nothing restored it: the tab attaches once, at mount, and had no reason
+ * to try again. An agent was then told the notebook did not exist while the
+ * user was looking straight at it.
+ *
+ * So: retry with a backoff, and once the stream is back, ask every Overleaf tab
+ * to re-announce itself. Attaching is idempotent — keyed on (project, file) —
+ * so a tab that never lost anything simply keeps the id it had.
+ */
+let rpcRetryTimer = null;
+let rpcRetryDelay = 5_000;
+const RPC_RETRY_MAX = 60_000;
+
+function scheduleRpcReconnect() {
+  if (rpcRetryTimer) return;
+  rpcRetryTimer = setTimeout(async () => {
+    rpcRetryTimer = null;
+    const tabs = await chrome.tabs.query({ url: ['*://*.overleaf.com/project/*'] });
+    // No tab to serve: stop retrying rather than polling a dead port forever.
+    if (!tabs.length) { rpcRetryDelay = 5_000; return; }
+    const stream = await connectRpc(dispatchToTab).catch(() => null);
+    if (!stream) {
+      rpcRetryDelay = Math.min(rpcRetryDelay * 2, RPC_RETRY_MAX);
+      scheduleRpcReconnect();
+      return;
+    }
+    rpcRetryDelay = 5_000;
+    for (const tab of tabs) {
+      chrome.tabs.sendMessage(tab.id, { cmd: 'wb-reattach' }).catch(() => {});
+    }
+  }, rpcRetryDelay);
 }
 
 /** Forward an agent's request to whichever Overleaf tab holds that notebook. */

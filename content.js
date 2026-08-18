@@ -27,7 +27,7 @@
 
   // ── page-bridge RPC (MAIN world) ───────────────────────────────────────────
   let seq = 0;
-  function askBridge(action, timeoutMs = 1200) {
+  function askBridge(action, timeoutMs = 1200, data = null) {
     return new Promise((resolve) => {
       const id = `wb${++seq}`;
       const timer = setTimeout(() => { window.removeEventListener('message', onMsg); resolve(null); }, timeoutMs);
@@ -38,7 +38,7 @@
         resolve(ev.data.payload);
       }
       window.addEventListener('message', onMsg);
-      window.postMessage({ type: 'wb-bridge-request', id, action }, location.origin);
+      window.postMessage({ type: 'wb-bridge-request', id, action, data }, location.origin);
     });
   }
 
@@ -573,6 +573,7 @@
     let mode = 'view';
     let lastStats = null;      // carries edits() for the Save button
     let loadedSource = '';     // the exact bytes we parsed, for a minimal diff
+    let docBacked = false;     // Overleaf holds this .wb as a doc, not a binary file
     let loadedBlobUrl = null;  // content-addressed → doubles as a version token
 
     // Tier-2 probe: is a local wolfbook running? Everything that needs the
@@ -855,7 +856,12 @@
         // and the sha changes when a collaborator saves.
         const fv = probeFileView();
         const blobUrl = fv && fv.name === fileName ? fv.blobUrl : null;
-        const got = await provider.getSource(fileName, { blobUrl, force, preferEditor: true });
+        // Overleaf holds a .wb one of two ways, and they save differently:
+        //   uploaded  → a binary FILE, shown as "no preview" + a Download link
+        //   created   → a DOC, opened in CodeMirror like any .tex
+        // Everything made inside Overleaf — including "New file" — is a doc.
+        docBacked = !blobUrl && !!document.querySelector('.cm-content');
+        const got = await provider.getSource(fileName, { blobUrl, force, preferEditor: true, docBacked });
         loadedSource = got.source;
         loadedBlobUrl = blobUrl;
 
@@ -869,8 +875,15 @@
           return;
         }
 
-        try { parsed = JSON.parse(got.source); }
-        catch (e) { throw new Error(`This file is not valid .wb JSON (${e.message}). Use Source to inspect it.`); }
+        // A blank file is a NEW notebook, not a broken one. Overleaf's "New
+        // file" writes zero bytes, so the first thing a user ever sees of a
+        // notebook they just created was a JSON parse error.
+        if (!got.source.trim()) {
+          parsed = { cells: [] };
+        } else {
+          try { parsed = JSON.parse(got.source); }
+          catch (e) { throw new Error(`This file is not valid .wb JSON (${e.message}). Use Source to inspect it.`); }
+        }
 
         // Only download the whole project when an image actually needs it.
         if (lastResolver?.dispose) lastResolver.dispose();
@@ -1124,6 +1137,36 @@
         }
         const { text, changed } = serialiseModel(
           parsed, loadedSource, edits.size, structureDirty, clearedOutputs, savedOutputs);
+
+        // A DOC is saved through CodeMirror, not uploaded.
+        //
+        // Dispatching a transaction is what typing does, so Overleaf's own OT
+        // extension syncs it: the file entity is never replaced, the tree keeps
+        // its id, and none of the "no file is selected" recovery below applies.
+        // Uploading over a doc would instead leave the project with a doc and a
+        // file of the same name — the state Overleaf itself refuses to create.
+        if (docBacked) {
+          const res = await askBridge('set-editor-doc', 4000, { text });
+          if (!res || !res.ok) {
+            note.textContent = res?.error || 'could not write into the Overleaf editor';
+            holdMessage('Save failed', 6000);
+            saveBtn.disabled = false;
+            return;
+          }
+          // The model IS what is on screen now, so mark it clean in place
+          // rather than re-rendering and dropping live outputs and open editors.
+          loadedSource = text;
+          for (const st of (lastStats?.cellStates || [])) {
+            st.original = st.code;
+            st.outputsStale = false;
+          }
+          structureDirty = false;
+          holdMessage(`Saved — ${changed}`, 5000);
+          note.textContent = `saved into the Overleaf document (${(text.length / 1024).toFixed(1)} KB)`;
+          refreshSaveButton();
+          saveBtn.disabled = false;
+          return;
+        }
 
         // Folder id, best source first: the project tree Overleaf itself
         // received over its websocket is authoritative, and also lets a notebook
@@ -1436,7 +1479,15 @@
     if (!window.__wbRpcListener && chrome.runtime?.onMessage?.addListener) {
       window.__wbRpcListener = true;
       chrome.runtime.onMessage.addListener((m, _s, reply) => {
-        if (m?.cmd !== 'wb-rpc') return;
+        if (m?.cmd !== 'wb-rpc' && m?.cmd !== 'wb-reattach') return;
+        if (m.cmd === 'wb-reattach') {
+          // The server came back (restarted, or started after this tab). Say we
+          // are here again — attach is keyed on (project, file), so this is a
+          // no-op when nothing was lost.
+          attachToCoalition().catch(() => {});
+          reply({ handled: true });
+          return true;
+        }
         if (!attachedId || m.req?.notebookId !== attachedId) { reply({ handled: false }); return true; }
         handleAgentRpc(m.req)
           .then((result) => reply({ handled: true, result }))

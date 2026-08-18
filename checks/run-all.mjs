@@ -22,6 +22,7 @@ const SUITES = [
   ['viewer in a browser', 'check-browser.mjs', shot ? ['--screenshot'] : []],
   ['standalone viewer page', 'check-standalone.mjs', []],
   ['content.js integration', 'check-extension.mjs', []],
+  ['empty .wb held as a doc', 'check-doc-notebook.mjs', []],
   ['evaluation', 'check-evaluate.mjs', []],
   ['overleaf folder id', 'check-folder-id.mjs', []],
   ['save to overleaf', 'check-save.mjs', []],

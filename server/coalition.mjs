@@ -109,6 +109,36 @@ export class Coalition {
   refresh() { return this.register(); }
 }
 
+
+/**
+ * Translate an MCP tool result into the reply shape the PRIMARY reads.
+ *
+ * This is not the MCP wire format, and assuming it was cost a silent failure:
+ * the primary reconstructs its content blocks from `r.parts` (or a bare
+ * `r.text`), so a reply carrying MCP's `content: [{type, text}]` parsed fine,
+ * produced zero parts, and reached the agent as an EMPTY string — a tool that
+ * answered successfully with nothing at all. The reference is
+ * `claude-mcp/worker.js` `_handleInvoke` in the VS Code extension; match it.
+ *
+ *   {parts: [{kind: 'text'|'image', value}], isError: false}
+ *   {error: '…', isError: true}
+ *
+ * Images travel as data: URIs, which is how the primary tells them apart.
+ */
+export function toWorkerReply(result) {
+  if (result?.isError) {
+    const first = (result.content || []).map((p) => p?.text ?? p?.value ?? '').join('\n');
+    return { error: first || 'tool failed', isError: true };
+  }
+  const parts = (result?.content || []).map((p) => {
+    const value = String(p?.text ?? p?.value ?? '');
+    return value.startsWith('data:image/') && value.includes(';base64,')
+      ? { kind: 'image', value }
+      : { kind: 'text', value };
+  });
+  return { parts, isError: false };
+}
+
 /**
  * Handle the endpoints a coalition member must serve.
  *
@@ -166,12 +196,9 @@ export function handleCoalitionRequest(req, res, url, ctx) {
         return;
       }
       try {
-        send(200, await ctx.invokeTool(parsed.name, parsed.arguments || {}));
+        send(200, toWorkerReply(await ctx.invokeTool(parsed.name, parsed.arguments || {})));
       } catch (e) {
-        send(200, {
-          content: [{ type: 'text', text: String(e?.message || e) }],
-          isError: true,
-        });
+        send(200, { error: String(e?.message || e), isError: true });
       }
     });
     return true;
