@@ -92,6 +92,9 @@ const PAGE = `<!doctype html>
 <script>
 window.chrome = {
   runtime: {
+    // A live extension always has an id; content.js treats its absence as
+    // an orphaned content script (the extension reloaded under the tab).
+    id: 'wolfbook-check',
     lastError: null,
     getURL: (p) => '/' + String(p).replace(/^\\//, ''),
     sendMessage: (msg, cb) => { if (typeof cb === 'function') cb({ ok: true, connected: false }); },

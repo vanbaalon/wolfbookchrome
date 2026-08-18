@@ -325,6 +325,24 @@
     return lines.join('\n');
   }
 
+  /**
+   * "yes" is not enough: a MOUNTED BUT EMPTY panel is its own failure, and it
+   * looks identical to no panel at all in a screenshot.
+   */
+  function panelState() {
+    const host = document.getElementById(HOST_ID);
+    if (!host) return 'no';
+    const shadow = host.shadowRoot;
+    if (!shadow) return 'host present but no shadow root — module import failed';
+    const bar = shadow.querySelector('.wb-toolbar');
+    const cells = shadow.querySelectorAll('.wb-cell').length;
+    const err = shadow.querySelector('.wb-error-box');
+    const r = host.getBoundingClientRect();
+    return `yes — toolbar=${bar ? 'present' : 'MISSING'} cells=${cells}`
+      + `${err ? ` error="${err.textContent.slice(0, 80)}"` : ''}`
+      + ` box=${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.top)}`;
+  }
+
   function diagnosisText(reason) {
     const pane = probeEditorPane();
     const tab = probeActiveTab();
@@ -335,7 +353,8 @@
       + `  tree selection : ${tree || '(none found)'}\n`
       + `  chosen file    : ${probeSelectedFile() || '(none)'}\n`
       + `  editor pane    : ${pane ? `<${pane.tagName.toLowerCase()} class="${pane.className || ''}">` : '(none found)'}\n`
-      + `  panel mounted  : ${document.getElementById(HOST_ID) ? 'yes' : 'no'}\n`
+      + `  panel mounted  : ${panelState()}\n`
+      + `  extension      : ${contextAlive() ? 'live' : 'STALE — reload this tab (the extension was reloaded under it)'}\n`
       + `  state          : currentFile=${JSON.stringify(currentFile)} mountError=${JSON.stringify(lastMountError)}\n`
       + '  A "(none found)" line names the function to fix in content.js\n'
       + '  (probeActiveTab / probeTreeSelection / probeEditorPane).';
@@ -552,10 +571,45 @@
     if (lastResolver?.dispose) { lastResolver.dispose(); lastResolver = null; }
   }
 
+  /**
+   * Is this script still attached to a live extension?
+   *
+   * Reloading an unpacked extension ORPHANS the content scripts already running
+   * in open tabs: the code keeps executing, but every chrome.* call throws
+   * "Extension context invalidated". So the panel cannot import its own viewer
+   * modules and comes up blank — which looks like the notebook failing, not
+   * like a stale tab, and is the single most confusing thing that happens while
+   * developing this. chrome.runtime.id is undefined exactly in that state.
+   */
+  const contextAlive = () => {
+    try { return !!chrome.runtime?.id; } catch (_) { return false; }
+  };
+
+  /** Say plainly that the tab is stale, in the place the notebook would be. */
+  function showStaleBanner(pane, fileName) {
+    document.getElementById(HOST_ID)?.remove();
+    const box = document.createElement('div');
+    box.id = HOST_ID;
+    box.style.cssText = 'position:absolute;inset:0;z-index:40;background:#fff;'
+      + 'display:flex;align-items:center;justify-content:center;padding:24px;'
+      + 'font:14px/1.5 system-ui,-apple-system,sans-serif;color:#1f2328;text-align:center';
+    box.innerHTML = '<div><div style="font-weight:600;margin-bottom:6px">Wolfbook was reloaded</div>'
+      + '<div style="color:#57606a">This tab is still running the previous version. '
+      + 'Reload the page (⌘R) to open <b></b> again.</div></div>';
+    box.querySelector('b').textContent = fileName;
+    if (getComputedStyle(pane).position === 'static') pane.style.position = 'relative';
+    pane.appendChild(box);
+  }
+
   async function mount(fileName) {
     teardown();
     const pane = probeEditorPane();
     if (!pane) { diagnose(`found "${fileName}" but no editor pane to mount over`); return; }
+    if (!contextAlive()) {
+      console.info('[wolfbook] the extension was reloaded; this tab needs a refresh.');
+      showStaleBanner(pane, fileName);
+      return;
+    }
     if (getComputedStyle(pane).position === 'static') pane.style.position = 'relative';
 
     const host = document.createElement('div');
@@ -1708,13 +1762,12 @@
 
   // ── selection tracking ────────────────────────────────────────────────────
   function sync() {
-    // While a save is in flight, Overleaf briefly has NOTHING selected: the
-    // upload replaces the file entity, so the tree drops the old id before the
-    // new one appears. Tearing down then would close the notebook the user is
-    // still working in.
-    if (Date.now() < suppressTeardownUntil) return;
     const name = probeSelectedFile();
     const isWb = !!name && /\.wb$/i.test(name);
+    // The save window suppresses TEARDOWN only, never mounting. It used to skip
+    // sync() wholesale, so for its 30 seconds the extension also ignored the
+    // user opening a different notebook — a save made the panel briefly deaf.
+    if (!isWb && currentFile && Date.now() < suppressTeardownUntil) return;
     if (isWb && name !== currentFile) {
       currentFile = name;
       lastMountError = null;
@@ -1725,6 +1778,9 @@
         diagnose(`mounting "${name}" threw: ${lastMountError}`);
       });
     } else if (!isWb && currentFile) {
+      // Overleaf briefly has NOTHING selected while a save is in flight: the
+      // upload replaces the file entity, so the tree drops the old id before
+      // the new one appears. That is what the window above protects.
       currentFile = null;
       teardown();
     }

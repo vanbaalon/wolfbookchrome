@@ -119,6 +119,9 @@ document.querySelector('.cm-content').cmView = {
 
 window.chrome = {
   runtime: {
+    // A live extension always has an id; content.js treats its absence as
+    // an orphaned content script (the extension reloaded under the tab).
+    id: 'wolfbook-check',
     lastError: null,
     getURL: (p) => '/' + String(p).replace(/^\\//, ''),
     sendMessage: (msg, cb) => { if (typeof cb === 'function') cb({ ok: true, connected: false }); },
@@ -171,6 +174,37 @@ const deadline = Date.now() + 40000;
   say('it renders as an empty notebook', !!nb && nb.querySelectorAll('.wb-cell').length === 0,
       nb ? nb.querySelectorAll('.wb-cell').length + ' cells' : 'no notebook');
 
+  // ── the extension is reloaded under the tab ────────────────────────────
+  // Chrome leaves this script running against a DEAD context: chrome.runtime.id
+  // goes away and every chrome.* call throws, so the panel cannot import its
+  // own viewer modules and comes up blank — indistinguishable on screen from
+  // the notebook itself being broken. It must say which it is. Done here,
+  // before anything is edited, so the re-mount costs no work.
+  const tabs = document.querySelectorAll('.editor-file-tab');
+  const selectTab = async (i) => {
+    tabs.forEach((t, k) => t.classList.toggle('editor-file-tab-active', k === i));
+    await sleep(800);
+  };
+  delete window.chrome.runtime.id;
+  await selectTab(0);                       // main.tex — the panel tears down
+  await selectTab(1);                       // test.wb — it must come back, stale
+  await sleep(900);
+  const staleHost = document.getElementById('wolfbook-overleaf-host');
+  say('a stale tab says so instead of coming up blank',
+      !!staleHost && /Wolfbook was reloaded/i.test(staleHost.textContent),
+      staleHost ? JSON.stringify(staleHost.textContent.slice(0, 48)) : 'no panel at all');
+
+  window.chrome.runtime.id = 'wolfbook-check';
+  await selectTab(0);
+  await selectTab(1);
+  for (let i = 0; i < 60; i++) {
+    const h = document.getElementById('wolfbook-overleaf-host');
+    shadow = h && h.shadowRoot;
+    if (shadow && shadow.querySelector('.wb-notebook')) break;
+    await sleep(200);
+  }
+  say('and the panel comes back once the tab is fresh again', !!shadow);
+
   // With no cells there is exactly one gap — the trailing strip — and without
   // it a new notebook would have no way to gain its first cell at all.
   const gapBtns = shadow ? shadow.querySelectorAll('.wb-gap .wb-gap-btn') : [];
@@ -184,7 +218,7 @@ const deadline = Date.now() + 40000;
         shadow.querySelectorAll('.wb-cell').length === 1,
         shadow.querySelectorAll('.wb-cell').length + ' cells');
 
-    // ── the three things that made a new cell unusable ──────────────────
+  // ── the three things that made a new cell unusable ──────────────────
     const cell = shadow.querySelector('.wb-cell');
 
     // Inserting opens the editor, which HIDES the <pre> — so assert that

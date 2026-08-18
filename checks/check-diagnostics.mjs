@@ -44,6 +44,9 @@ const realInfo = console.info.bind(console);
 console.info = (...a) => { window.__logs.push(a.join(' ')); realInfo(...a); };
 window.chrome = {
   runtime: {
+    // A live extension always has an id; content.js treats its absence as
+    // an orphaned content script (the extension reloaded under the tab).
+    id: 'wolfbook-check',
     lastError: null,
     getURL: (p) => '/' + String(p).replace(/^\\//, ''),
     sendMessage: (m, cb) => { if (cb) cb({ ok: true, connected: false }); },
