@@ -732,6 +732,10 @@
     let lastStats = null;      // carries edits() for the Save button
     let loadedSource = '';     // the exact bytes we parsed, for a minimal diff
     let docBacked = false;     // Overleaf holds this .wb as a doc, not a binary file
+    // Declared HERE, not beside keepAttached() far below: the call site is
+    // hundreds of lines earlier, and a `let` in the temporal dead zone throws
+    // ReferenceError the moment the timer is set up.
+    let keepAttachedTimer = null;
     let loadedBlobUrl = null;  // content-addressed → doubles as a version token
 
     // Tier-2 probe: is a local wolfbook running? Everything that needs the
@@ -936,6 +940,10 @@
 
       evaluator = makeServeEvaluator(() => servePortNow, () => serveTokenNow, requestToken);
       attachToCoalition().catch((e) => log('coalition attach failed', e));
+      // The first attempt fails whenever the token is not stored yet — and the
+      // token is only asked for on evaluate — so keep trying rather than
+      // leaving the notebook permanently invisible to agents.
+      keepAttached();
 
       // The token is still asked for ONLY on evaluate — a dialog on open is
       // startling when the reader may just want to look. But its absence has a
@@ -1701,7 +1709,6 @@
      * is keyed on (project, file), so re-announcing costs nothing when nothing
      * was lost.
      */
-    let keepAttachedTimer = null;
     function keepAttached() {
       if (keepAttachedTimer) return;
       keepAttachedTimer = setInterval(() => {
