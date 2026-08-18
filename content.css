@@ -1,0 +1,13 @@
+/* content.css — the ONLY styles that touch Overleaf's own page.
+   Everything else lives inside the shadow root (see viewer/theme-css.js), so
+   the extension cannot restyle Overleaf and Overleaf cannot restyle the
+   notebook. Keep this file tiny. */
+
+#wolfbook-overleaf-host {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: #fff;
+  overflow: hidden;
+  contain: layout paint;
+}

@@ -1,0 +1,17 @@
+# Test fixtures are HARVESTED FROM REAL NOTEBOOKS in the author's workspace, so
+# they carry unpublished research code and outputs. They are regenerated with
+#     node fixtures/make-fixture.mjs
+# which falls back to synthetic samples when there is nothing to harvest, so a
+# fresh clone still gets a working test suite.
+fixtures/sample.wb
+fixtures/sample-project.zip
+fixtures/img/
+fixtures/*.png
+
+# Editor build inputs. vendor/codemirror.bundle.js IS committed, so loading the
+# extension needs no npm; only changing the editor does.
+editor/node_modules/
+editor/package-lock.json
+
+node_modules/
+.DS_Store
