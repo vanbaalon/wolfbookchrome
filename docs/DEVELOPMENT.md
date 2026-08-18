@@ -148,6 +148,56 @@ path (the server always returns rich HTML, so both are hidden when it is in use)
 - Results are text. Plots evaluate fine but come back as a text description —
   which is exactly why `wolfbook-serve` exists.
 
+## Standalone: a `.wb` outside Overleaf
+
+`viewer/standalone.html` is an extension PAGE — not a content script — because
+Chrome never renders a `.wb` at all. An unknown type on `file://` is
+**downloaded, not displayed**, so there is no document for a script to attach
+to; the only way to show the notebook is a page of our own, told where the file
+is via `?src=`.
+
+```
+Finder "Open With"                     toolbar popup / drag-drop
+        │                                          │
+  Wolfbook Viewer (Chrome).app                     │
+  (AppleScript applet: `on open`)                  │
+        │  open -a "Google Chrome" …               │
+        ▼                                          ▼
+  chrome-extension://<id>/viewer/standalone.html?src=file:///…
+        │
+        └── same wb-viewer.js, same CSS, same optional wolfbook-serve
+```
+
+Points that each cost something to learn:
+
+- **A shell script in an `.app` does not receive dropped files.** Finder sends
+  them as an Apple Event (`odoc`), never as `argv`, so the stub is an AppleScript
+  applet with an `on open` handler — compiled by `osacompile`, not copied.
+- **The stub declares the type as `LSHandlerRank: Alternate`, role `Viewer`**,
+  and never calls `LSSetDefaultRoleHandlerForContentType`. That is the whole
+  difference between joining the "Open With" list and hijacking double-click.
+  Verify with `LSCopyDefaultRoleHandlerForContentType` — it must still answer
+  `com.microsoft.VSCode`.
+- **An unpacked extension's id comes from the folder it was loaded from**, so it
+  cannot be hard-coded; the installer reads it back out of Chrome's own profile.
+  Watch the empty-path trap there: `realpath('')` is the *current directory*, so
+  a naive path comparison matched every extension that records no path.
+- **Chrome's own `Info.plist` is not an option.** It is inside a signed bundle;
+  editing it breaks the signature.
+- **`fetch('file://…')` needs "Allow access to file URLs"**, which is why the
+  picker and drag-and-drop exist beside it — they need no permission at all, and
+  the page detects the missing switch with `chrome.extension.isAllowedFileSchemeAccess`
+  rather than guessing from a failed fetch.
+- **The page cannot write back** to the file it was opened from, so edits leave
+  via **Download .wb**. Silently rewriting a double-clicked file would be the
+  wrong default even if a tab could.
+- `standalone.js` falls back to `import.meta.url` when `chrome.runtime` is
+  absent — which is the only reason `check-standalone.mjs` can drive the real
+  page over plain HTTP, with no extension loaded.
+
+`tools/register-chrome-viewer-macos.sh` builds and registers the stub;
+`--uninstall` removes it.
+
 ## Saving back to Overleaf
 
 Edit a cell and a **Save to Overleaf** button appears, naming how many cells will
@@ -312,6 +362,7 @@ node checks/check-md.mjs         # markdown subset
 node checks/check-wl-highlight.mjs # the Wolfram tokenizer
 node checks/check-browser.mjs    # the viewer in real Chrome: CSS scoping, KaTeX,
                                  # sanitising, output fidelity
+node checks/check-standalone.mjs # the real standalone page, loaded as a page
 node checks/check-extension.mjs  # real content.js against Overleaf's real markup
 node checks/check-evaluate.mjs   # Run / Run all / Math toggle, against a fake kernel
 node checks/check-diagnostics.mjs # the failure reporting, on an unmountable page

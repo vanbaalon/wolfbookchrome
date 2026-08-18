@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wolfbook</title>
+<style>
+  body {
+    margin: 0; width: 280px;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: #1f2328; background: #fff;
+  }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; }
+  header img { width: 20px; height: 20px; }
+  header b { font-size: 14px; }
+  .body { padding: 0 14px 14px; }
+  button {
+    width: 100%; font: inherit; text-align: left;
+    padding: 8px 10px; margin-top: 8px;
+    border: 1px solid #d0d7de; border-radius: 6px; background: #fff; cursor: pointer;
+  }
+  button:hover { background: #f3f4f6; }
+  button b { display: block; }
+  button span { color: #57606a; font-size: 12px; }
+  .status { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eaeef2;
+            color: #57606a; font-size: 12px; }
+  .status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+                 background: #d0d7de; margin-right: 6px; vertical-align: middle; }
+  .status.live .dot { background: #1a7f37; }
+  a { color: #0969da; }
+</style>
+</head>
+<body>
+  <header>
+    <img src="../icons/icon48.png" alt="">
+    <b>Wolfbook</b>
+  </header>
+  <div class="body">
+    <button data-act="open">
+      <b>Open a notebook…</b>
+      <span>Read a .wb file from this computer</span>
+    </button>
+    <button data-act="overleaf">
+      <b>Overleaf notebooks</b>
+      <span>Click any .wb in a project — the panel appears there</span>
+    </button>
+    <div class="status"><span class="dot"></span><span class="text">checking for a kernel…</span></div>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

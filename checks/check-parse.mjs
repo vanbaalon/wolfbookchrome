@@ -14,17 +14,27 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
+
+// Page modules: ES modules that touch `document` / `location` the moment they
+// load, because they ARE the page rather than a library it uses. Importing one
+// in Node fails on the DOM, not on anything wrong with the file — so they are
+// parsed instead, in a child Node with the module goal. That still catches the
+// class of bug this suite exists for: `node --check` rejects an unterminated
+// template literal and a duplicate lexical declaration alike.
+const PAGE_MODULES = ['viewer/standalone.js', 'viewer/popup.js'];
 
 const MODULES = [];
 for (const dir of ['viewer', 'vendor']) {
   const d = path.join(root, dir);
   if (!fs.existsSync(d)) continue;
   for (const f of fs.readdirSync(d).sort()) {
-    if (f.endsWith('.js') || f.endsWith('.mjs')) MODULES.push(path.join(dir, f));
+    const rel = path.join(dir, f);
+    if ((f.endsWith('.js') || f.endsWith('.mjs')) && !PAGE_MODULES.includes(rel)) MODULES.push(rel);
   }
 }
 
@@ -42,6 +52,17 @@ for (const rel of MODULES) {
     ok(rel, Object.keys(mod).length ? `exports: ${Object.keys(mod).slice(0, 4).join(', ')}` : 'no exports');
   } catch (e) {
     bad(rel, `${e.name}: ${e.message}`);
+  }
+}
+
+for (const rel of PAGE_MODULES) {
+  const file = path.join(root, rel);
+  if (!fs.existsSync(file)) { bad(rel, 'missing'); continue; }
+  try {
+    execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' });
+    ok(rel, 'parses (page module)');
+  } catch (e) {
+    bad(rel, String(e.stderr || e.message).split('\n').find((l) => /Error/.test(l)) || 'parse failed');
   }
 }
 
@@ -65,7 +86,7 @@ for (const rel of SCRIPTS) {
 // text looked identical — but a string comparison against the same-looking
 // literal failed, and grep silently treated the file as binary. Cheap to check,
 // very expensive to debug.
-for (const rel of [...MODULES.filter((m) => !m.startsWith('vendor/')), ...SCRIPTS]) {
+for (const rel of [...MODULES.filter((m) => !m.startsWith('vendor/')), ...PAGE_MODULES, ...SCRIPTS]) {
   const buf = fs.readFileSync(path.join(root, rel));
   const found = [];
   for (let i = 0; i < buf.length; i++) {
@@ -76,12 +97,30 @@ for (const rel of [...MODULES.filter((m) => !m.startsWith('vendor/')), ...SCRIPT
   else ok(`${rel} free of control characters`);
 }
 
+// Extension PAGES reference their script and icons by relative path, which no
+// module graph and no manifest can vouch for.
+for (const page of ['viewer/standalone.html', 'viewer/popup.html']) {
+  const file = path.join(root, page);
+  if (!fs.existsSync(file)) { bad(page, 'missing'); continue; }
+  const html = fs.readFileSync(file, 'utf8');
+  const refs = [...html.matchAll(/(?:src|href)="([^"#:]+)"/g)].map((mm) => mm[1]);
+  const gone = refs.filter((r) => !fs.existsSync(path.resolve(path.dirname(file), r)));
+  if (gone.length) bad(`${page} references existing files`, gone.join(', '));
+  else ok(`${page} references existing files`, refs.length + ' ref(s)');
+}
+
 // The manifest must stay valid JSON and reference files that exist.
 try {
   const m = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+  // Icons and the popup are included deliberately: Chrome refuses to load the
+  // WHOLE extension if any icon path is wrong, and reports it only in a corner
+  // of chrome://extensions — a failure that looks like "the extension vanished".
   const referenced = [
     m.background?.service_worker,
     ...(m.content_scripts || []).flatMap((cs) => [...(cs.js || []), ...(cs.css || [])]),
+    ...Object.values(m.icons || {}),
+    m.action?.default_popup,
+    ...Object.values(m.action?.default_icon || {}),
   ].filter(Boolean);
   const missing = referenced.filter((f) => !fs.existsSync(path.join(root, f)));
   if (missing.length) bad('manifest references existing files', missing.join(', '));

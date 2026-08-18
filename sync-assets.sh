@@ -61,4 +61,16 @@ for _logo in "$CLIENT/../icons/wolfbook_file_icon.png" "$CLIENT/../images/icon.p
   fi
 done
 
+# Toolbar / extension icons, from the same alpha-channel source. Chrome shows
+# these in the toolbar, the extensions page and the popup title bar; without
+# them it draws a grey letter tile.
+_src="$CLIENT/../icons/wolfbook_file_icon.png"
+if [ -f "$_src" ]; then
+  mkdir -p icons
+  for s in 16 32 48 128; do
+    sips -Z $s "$_src" --out "icons/icon${s}.png" >/dev/null 2>&1 \
+      && printf '  %-18s %8d bytes\n' "icons/icon${s}.png" "$(wc -c < icons/icon${s}.png)"
+  done
+fi
+
 echo "vendored ok"

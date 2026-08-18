@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wolfbook viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: #1f2328; background: #fff;
+    display: flex; flex-direction: column;
+  }
+  /* The toolbar is deliberately the SAME chrome as the Overleaf panel: this is
+     the same viewer, just without a project around it. */
+  .sv-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 12px; border-bottom: 1px solid #d0d7de; background: #f6f8fa;
+    flex: 0 0 auto;
+  }
+  .sv-bar img { width: 16px; height: 16px; }
+  .sv-name { font-weight: 600; }
+  .sv-note { color: #57606a; }
+  .sv-spacer { flex: 1; }
+  .sv-bar button {
+    font: inherit; padding: 3px 10px; border: 1px solid #d0d7de; border-radius: 6px;
+    background: #fff; cursor: pointer;
+  }
+  .sv-bar button:hover:not(:disabled) { background: #f3f4f6; }
+  .sv-bar button:disabled { opacity: .5; cursor: default; }
+  .sv-kernel { color: #57606a; font-size: 12px; }
+  .sv-kernel.live { color: #1a7f37; }
+  /* The viewer mounts a shadow root here, so nothing on this page can restyle
+     the notebook and WL_CSS cannot escape onto the toolbar. */
+  /* The notebook needs breathing room from the window edge. In Overleaf the
+     surrounding pane supplies it; standing alone there is nothing to the left
+     of the first character but the frame of the window, and text set flush
+     against it is unpleasant to read. */
+  #sv-host { flex: 1 1 auto; overflow: auto; padding: 22px 30px 90px; }
+  .sv-msg { max-width: 640px; margin: 48px auto; padding: 0 20px; }
+  .sv-msg h1 { font-size: 18px; margin: 0 0 12px; }
+  .sv-msg code, .sv-msg kbd {
+    background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 4px;
+    padding: 1px 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  }
+  .sv-msg ol { padding-left: 20px; }
+  .sv-msg li { margin: 6px 0; }
+  .sv-err { color: #82071e; background: #fff5f5; border: 1px solid #ffc1c0;
+            border-radius: 6px; padding: 10px 12px; }
+  .sv-drop { border: 2px dashed #d0d7de; border-radius: 10px; padding: 28px; text-align: center;
+             color: #57606a; margin-top: 18px; }
+  body.sv-dragging .sv-drop { border-color: #0969da; background: #f0f6ff; color: #0969da; }
+</style>
+</head>
+<body>
+  <div class="sv-bar">
+    <img class="sv-logo" alt="" title="Wolfbook">
+    <span class="sv-name">Wolfbook viewer</span>
+    <span class="sv-note"></span>
+    <span class="sv-spacer"></span>
+    <span class="sv-kernel"></span>
+    <button data-act="open">Open…</button>
+    <button data-act="download" disabled>Download .wb</button>
+  </div>
+  <div id="sv-host"></div>
+  <input type="file" accept=".wb,.evsnb,.vsnb,application/json" hidden>
+  <script type="module" src="standalone.js"></script>
+</body>
+</html>

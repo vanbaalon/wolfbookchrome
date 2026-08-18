@@ -46,6 +46,7 @@ The only outbound traffic is to `overleaf.com`, the site you already have open.
 | **Edit** | Click any cell to edit it in CodeMirror. Insert, delete, move and re-type cells; ⌘Z undoes. |
 | **Save** | One button writes the notebook back to your Overleaf project, with a check that nobody changed it meanwhile. |
 | **Copy LaTeX** | Every equation offers its LaTeX source — you are in Overleaf, after all. |
+| **Standalone** | A `.wb` that is not in Overleaf at all — in `~/Downloads`, or attached to an email — opens in its own tab. Same renderer, same optional kernel. |
 | **AI access** | Optionally, agents speaking MCP can read, run and edit the open notebook. Saving is never theirs to do. |
 
 ## Install
@@ -53,7 +54,8 @@ The only outbound traffic is to `overleaf.com`, the site you already have open.
 1. **Download or clone this repository.**
 2. Chrome → `chrome://extensions` → turn on **Developer mode** →
    **Load unpacked** → choose this folder.
-3. Open an Overleaf project containing a `.wb` file and click it.
+3. Open an Overleaf project containing a `.wb` file and click it — or click the
+   **Wolfbook icon** in the toolbar to open a `.wb` from your own computer.
 
 That is all that is needed for viewing. There is no build step: everything the
 browser needs is committed.
@@ -98,19 +100,43 @@ same KaTeX, the same Wolfram symbol table, the same rendering pipeline — so a
 notebook looks the same in Overleaf as it does in VS Code, rather than
 approximately the same.
 
-## Opening `.wb` files from Finder
+## Opening a `.wb` that is not in Overleaf
 
-Unrelated to this extension, but often asked at the same time: macOS does not
-know what a `.wb` file is, because VS Code's `Info.plist` declares dozens of
-extensions and `.wb` is not among them. macOS therefore gives the file a
-*dynamic* type that no application claims, and double-clicking does nothing
-useful.
+A notebook you were sent, or one sitting in `~/Downloads`, can be opened in a
+Chrome tab of its own — rendered by the same viewer, with the same optional
+kernel behind it:
 
-The quick fix, per user: right-click a `.wb` in Finder → **Get Info** →
-**Open with** → *Visual Studio Code* → **Change All…**
+- Click the **Wolfbook icon** in Chrome's toolbar → **Open a notebook…**, then
+  pick the file or drop it onto the page. Neither needs any permission.
+- Or let Chrome read local files directly, which is what makes the Finder route
+  below work: `chrome://extensions` → this extension → **Allow access to file
+  URLs**. The page says so itself, with a button, if it is missing.
 
-That points Finder at the real editor — **not** at this extension, which is only
-for notebooks living inside an Overleaf project.
+Edits made there are kept with **Download .wb** — a browser tab has no authority
+to rewrite the file it was opened from, and quietly overwriting a file you
+double-clicked would be the wrong default even if it had.
+
+### Adding Chrome to Finder's "Open With" menu (macOS)
+
+```bash
+tools/register-chrome-viewer-macos.sh
+```
+
+This builds `~/Applications/Wolfbook Viewer (Chrome).app`, a stub that hands the
+file's path to the viewer page. It registers as an **alternate** handler
+(`LSHandlerRank: Alternate`), so Chrome joins the **Open With** list and your
+double-click default is left exactly as it was. `--uninstall` removes it.
+
+Chrome cannot be given the type directly: its `Info.plist` lives inside a signed
+bundle, and editing it breaks the signature. A stub app is the supported way to
+add an entry to that menu.
+
+### What a double-click should do
+
+macOS does not know what a `.wb` file is, so it gives the file a *dynamic* type
+that no application claims. To point double-click at the real editor:
+right-click a `.wb` in Finder → **Get Info** → **Open with** → *Visual Studio
+Code* → **Change All…**
 
 ## Documentation
 

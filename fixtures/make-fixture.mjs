@@ -19,7 +19,26 @@ import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE = path.resolve(here, '..', '..', '..', '..');
+
+/**
+ * Where to harvest from — and, more importantly, when NOT to.
+ *
+ * This walks a directory tree looking for .wb files. Run from a clone that is
+ * not inside the wolfbook workspace, the old path arithmetic resolved to `/`
+ * and it walked the whole filesystem: slow, and it would rifle through a
+ * stranger's documents looking for notebooks. So harvest only when the
+ * resolved root really is the workspace, identified by a marker directory, and
+ * fall back to the synthetic samples otherwise.
+ */
+function findWorkspace() {
+  let dir = here;
+  for (let i = 0; i < 6; i++) {
+    dir = path.dirname(dir);
+    if (fs.existsSync(path.join(dir, 'Extension Development', 'resources', 'init.wl'))) return dir;
+  }
+  return null;
+}
+const WORKSPACE = findWorkspace();
 const MIME_HTML = 'x-application/wolfram-language-html';
 const MIME_ERR = 'application/vnd.code.notebook.error';
 
@@ -48,7 +67,7 @@ const found = {};
 let errorItem = null;
 const assets = new Map(); // zip path → source path on disk
 
-for (const file of walk(WORKSPACE)) {
+for (const file of (WORKSPACE ? walk(WORKSPACE) : [])) {
   if (Object.keys(found).length === Object.keys(WANTED).length && errorItem) break;
   let nb;
   try { nb = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
@@ -265,5 +284,8 @@ fs.rmSync(zipPath, { force: true });
 execSync(`zip -qr "${zipPath}" .`, { cwd: stage });
 fs.rmSync(stage, { recursive: true, force: true });
 
+console.log(WORKSPACE
+  ? `harvested from ${WORKSPACE}`
+  : 'no wolfbook workspace found — using synthetic samples only');
 console.log(`sample.wb          ${cells.length} cells (${Object.keys(found).join(', ')}${errorItem ? ', error' : ''})`);
 console.log(`sample-project.zip ${assets.size} asset(s), ${(fs.statSync(zipPath).size / 1024).toFixed(0)} KB`);

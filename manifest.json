@@ -2,13 +2,30 @@
   "manifest_version": 3,
   "name": "Wolfbook for Overleaf",
   "version": "0.3.0",
-  "description": "View, edit and run Wolfbook (.wb) notebooks inside Overleaf, against a local Wolfram kernel.",
+  "description": "View, edit and run Wolfbook (.wb) notebooks \u2014 inside Overleaf, or standalone from a local file \u2014 against a local Wolfram kernel.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "viewer/popup.html",
+    "default_title": "Wolfbook \u2014 open a .wb notebook",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "permissions": [
     "storage",
     "tabs"
   ],
   "host_permissions": [
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "file:///*"
   ],
   "background": {
     "service_worker": "background.js"

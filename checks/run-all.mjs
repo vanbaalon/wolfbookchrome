@@ -20,6 +20,7 @@ const SUITES = [
   ['markdown', 'check-md.mjs', []],
   ['wolfram tokenizer', 'check-wl-highlight.mjs', []],
   ['viewer in a browser', 'check-browser.mjs', shot ? ['--screenshot'] : []],
+  ['standalone viewer page', 'check-standalone.mjs', []],
   ['content.js integration', 'check-extension.mjs', []],
   ['evaluation', 'check-evaluate.mjs', []],
   ['overleaf folder id', 'check-folder-id.mjs', []],
