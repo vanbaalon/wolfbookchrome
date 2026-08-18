@@ -49,7 +49,10 @@ const PAGE = `<!doctype html>
   <div class="file-tree" style="width:220px;border-right:1px solid #ccc">
     <ul>
       <li role="treeitem" aria-selected="false"><span class="entity-name">main.tex</span></li>
-      <li role="treeitem" aria-selected="false"><span class="entity-name">test.wb</span></li>
+      <!-- Overleaf LEAVES the tree highlighted on a file whose tab was closed.
+           Keeping it selected here is what makes the tab authoritative, rather
+           than merely untested. -->
+      <li role="treeitem" aria-selected="true"><span class="entity-name">test.wb</span></li>
     </ul>
   </div>
   <div style="flex:1;display:flex;flex-direction:column">
@@ -175,7 +178,7 @@ const deadline = Date.now() + 40000;
       hitTop ? (hitTop.className || hitTop.tagName) : 'nothing there');
 
   const titleEl = shadow && shadow.querySelector('.wb-title');
-  say('the file is identified from the Overleaf tab, nothing selected in the tree',
+  say('the file is identified from the Overleaf tab',
       !!titleEl && titleEl.textContent === 'test.wb',
       titleEl ? JSON.stringify(titleEl.textContent) : 'no title');
   const errBox = shadow && shadow.querySelector('.wb-error-box');
@@ -330,6 +333,19 @@ const deadline = Date.now() + 40000;
           JSON.stringify(noteTxt.slice(0, 70)));
     }
   }
+
+  // ── the notebook tab is closed ─────────────────────────────────────────
+  // The tree still highlights test.wb. If that is allowed to answer "which file
+  // is open", the panel stays up over a document that is no longer the
+  // notebook — and a save then writes the notebook into THAT file.
+  const wbTab = document.querySelectorAll('.editor-file-tab')[1];
+  wbTab.remove();
+  document.querySelectorAll('.editor-file-tab')[0].classList.add('editor-file-tab-active');
+  await sleep(1200);
+  const stillThere = document.getElementById('wolfbook-overleaf-host');
+  say('closing the notebook tab closes the panel, even with the tree still on it',
+      !stillThere, stillThere ? 'panel still showing ' + (shadow?.querySelector('.wb-title')?.textContent || '?')
+                              : 'panel gone');
 
   document.getElementById('result').textContent = out.join('\\n');
   fetch('/__result', { method: 'POST', body: out.join('\\n') });

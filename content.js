@@ -197,7 +197,27 @@
   /** The file currently on screen, most reliable source first. */
   function probeSelectedFile() {
     const fv = probeFileView();
-    return (fv && fv.name) || probeActiveTab() || probeTreeSelection();
+    if (fv && fv.name) return fv.name;
+
+    // THE ACTIVE TAB IS THE ONLY AUTHORITY WHEN A TAB BAR EXISTS.
+    //
+    // The file tree keeps its highlight on a file whose tab has been CLOSED, so
+    // falling through to it meant the panel went on showing a notebook that was
+    // no longer open — over the top of whatever document really was. That is
+    // not merely cosmetic: a save then wrote the notebook into the document
+    // CodeMirror had moved on to, because the panel and the editor disagreed
+    // about which file was on screen.
+    //
+    // So the tree is consulted ONLY where there is no tab bar to ask. If tabs
+    // exist and none of them is identifiable as active, the answer is "nothing
+    // is open" — which closes the panel, the safe direction to be wrong in.
+    const tab = probeActiveTab();
+    if (tab) return tab;
+    const hasTabs = document.querySelector(
+      '.editor-file-tab-path, [class*="file-tab-path"], [role="tab"], [class*="editor-file-tab"]');
+    if (hasTabs) return null;
+
+    return probeTreeSelection();
   }
 
   /**
@@ -833,7 +853,7 @@
                  autocomplete="off" spellcheck="false">
           <button data-act="token-ok">Connect</button>
           <button data-act="token-cancel" title="Evaluate over MCP instead">Not now</button>
-          <span class="wb-token-hint">get it with <code>node cli.mjs token</code></span>`;
+          <span class="wb-token-hint">get it with <code>node server/cli.mjs token</code></span>`;
         bar.querySelector('.wb-token-msg').textContent = reason;
         body.parentNode.insertBefore(bar, body);
 
@@ -845,7 +865,15 @@
           const value = input.value.trim();
           if (!value) return;
           const after = await mcp({ cmd: 'serve-set-token', token: value });
-          if (after && after.authorised) { serveTokenNow = value; done(value); return; }
+          if (after && after.authorised) {
+            serveTokenNow = value;
+            // The coalition attach failed earlier for want of exactly this, so
+            // retry it now rather than leaving the notebook invisible to agents
+            // until the next 20-second sweep.
+            attachToCoalition().catch((e) => log('coalition attach failed', e));
+            done(value);
+            return;
+          }
           bar.querySelector('.wb-token-msg').textContent = 'That token was rejected. Try again:';
           input.select();
         });
@@ -908,6 +936,16 @@
 
       evaluator = makeServeEvaluator(() => servePortNow, () => serveTokenNow, requestToken);
       attachToCoalition().catch((e) => log('coalition attach failed', e));
+
+      // The token is still asked for ONLY on evaluate — a dialog on open is
+      // startling when the reader may just want to look. But its absence has a
+      // second consequence that was invisible: attaching to the MCP coalition
+      // needs the token too, so until it is given, the notebook cannot be seen
+      // by any agent. Say that in the status line, where it costs nothing.
+      if (!serveTokenNow) {
+        note.textContent = `wolfbook-serve on :${servePortNow} — its token is needed to run `
+          + 'cells here and to let AI agents see this notebook';
+      }
       runGroup.hidden = false;
       kernelSel.hidden = true;              // one server, one kernel for now
       formBtn.hidden = true;                // it always returns rich HTML
@@ -1822,10 +1860,16 @@
   function sync() {
     const name = probeSelectedFile();
     const isWb = !!name && /\.wb$/i.test(name);
-    // The save window suppresses TEARDOWN only, never mounting. It used to skip
-    // sync() wholesale, so for its 30 seconds the extension also ignored the
-    // user opening a different notebook — a save made the panel briefly deaf.
-    if (!isWb && currentFile && Date.now() < suppressTeardownUntil) return;
+    // The save window suppresses teardown ONLY WHILE NOTHING IS OPEN.
+    //
+    // What it was written for: an upload replaces the file entity, so Overleaf
+    // momentarily has no selection at all and would otherwise close the
+    // notebook mid-session. What it must NOT do is outlast a deliberate switch
+    // — for 30 seconds after any save, opening another file left the panel
+    // sitting over that file, still claiming to be the notebook. A save then
+    // wrote the notebook into it. A NAMED file is a real answer and always
+    // wins; only the transient nothing is waited out.
+    if (!name && currentFile && Date.now() < suppressTeardownUntil) return;
     if (isWb && name !== currentFile) {
       currentFile = name;
       lastMountError = null;
