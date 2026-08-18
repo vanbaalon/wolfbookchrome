@@ -567,7 +567,9 @@
       mcp({ cmd: 'serve-detach', notebookId: currentAttachedId });
       currentAttachedId = null;
     }
-    document.getElementById(HOST_ID)?.remove();
+    const old = document.getElementById(HOST_ID);
+    old?.__wbResizeObserver?.disconnect();
+    old?.remove();
     if (lastResolver?.dispose) { lastResolver.dispose(); lastResolver = null; }
   }
 
@@ -615,6 +617,37 @@
     const host = document.createElement('div');
     host.id = HOST_ID;
     pane.appendChild(host);
+
+    /**
+     * Never cover Overleaf's own toolbar.
+     *
+     * Which container we get depends on TIMING: on a fresh load the CodeMirror
+     * editor may not exist yet, so the pane probe falls back to the whole
+     * editor panel — which also holds Overleaf's toolbar row. Our panel then
+     * starts at the top of that row and our toolbar is painted underneath
+     * theirs: the notebook renders, but Save, Run all and the kernel picker are
+     * simply unreachable, which reads as "the features are missing".
+     *
+     * So measure the chrome inside whatever pane we were given and start below
+     * it. Re-measured on resize, because the Visual-mode toolbar is taller.
+     */
+    const clearOverleafChrome = () => {
+      const bar = pane.querySelector(
+        '.ol-cm-toolbar, .toolbar-editor, .toolbar-pdf, [class*="toolbar-editor"]');
+      if (!bar || !pane.contains(bar) || bar.contains(host)) { host.style.top = '0px'; return; }
+      const b = bar.getBoundingClientRect();
+      const p = pane.getBoundingClientRect();
+      // Only a bar at the TOP of the pane is chrome we must clear; one further
+      // down is part of the document region and covering it is correct.
+      const offset = b.height > 8 && b.top - p.top < 60 ? Math.round(b.bottom - p.top) : 0;
+      host.style.top = `${Math.max(0, offset)}px`;
+    };
+    clearOverleafChrome();
+    try {
+      const ro = new ResizeObserver(clearOverleafChrome);
+      ro.observe(pane);
+      host.__wbResizeObserver = ro;
+    } catch (_) { /* older browser: the one-off measurement stands */ }
 
     // Loading the viewer means dynamic import() of a web-accessible resource
     // from the isolated world. That is the standard MV3 pattern, but it is also
@@ -1746,12 +1779,20 @@
       if (!bar) return;
       const b = bar.getBoundingClientRect();
       const h = host.getBoundingClientRect();
+      // Hit-test the toolbar as well as measuring it: sitting UNDERNEATH
+      // Overleaf's own bar leaves a perfectly good rectangle on screen while
+      // being completely unclickable, which is exactly how Save and Run all
+      // went missing without anything appearing to be wrong.
+      const onTop = document.elementFromPoint(
+        Math.min(b.left + 30, window.innerWidth - 1), Math.min(b.top + b.height / 2, window.innerHeight - 1));
+      const covered = !!onTop && onTop !== host && !host.contains(onTop);
       const hidden = b.height < 10 || b.width < 100
         || b.bottom <= 0 || b.top >= window.innerHeight
-        || b.top < h.top - 2;
+        || b.top < h.top - 2 || covered;
       if (hidden) {
-        diagnose('the panel mounted, but its toolbar is not visible — the pane it '
+        diagnose('the panel mounted, but its toolbar is not usable — the pane it '
           + 'was mounted over is probably the wrong one\n'
+          + `  covered by : ${covered ? (onTop.tagName + '.' + String(onTop.className || '')) : '(nothing)'}\n`
           + `  toolbar : ${JSON.stringify(b.toJSON ? b.toJSON() : { top: b.top, height: b.height })}\n`
           + `  host    : ${JSON.stringify(h.toJSON ? h.toJSON() : { top: h.top, height: h.height })}\n`
           + `  pane    : ${pane.tagName}${pane.id ? '#' + pane.id : ''}`

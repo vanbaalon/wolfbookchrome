@@ -89,13 +89,16 @@ const PAGE = `<!doctype html>
          notebook came up with no toolbar while an uploaded one had one. The
          panel must therefore be taken over at the DOCUMENT region only. -->
     <div id="panel-source-editor" style="flex:1;position:relative;display:flex;flex-direction:column">
-      <div class="ol-cm-toolbar toolbar-editor" style="height:32px;background:#1e2a35;color:#fff">
+      <div class="ol-cm-toolbar toolbar-editor" style="height:32px;background:#1e2a35;color:#fff;position:relative;z-index:50">
         Overleaf toolbar (Code / Visual / Editing)
       </div>
-      <div class="cm-editor-wrapper" style="flex:1;position:relative">
-        <div class="cm-editor" style="height:100%">
-          <div class="cm-scroller"><div class="cm-content" contenteditable="true"></div></div>
-        </div>
+      <!-- The editor is a DIRECT child of the panel, so every candidate pane
+           the probe can find CONTAINS Overleaf's toolbar. Covering it would put
+           our toolbar underneath theirs: still on screen, still the right size,
+           and completely unclickable — which is how Save, Run all and the
+           kernel picker went missing while the notebook itself rendered fine. -->
+      <div class="cm-editor" style="flex:1;position:relative">
+        <div class="cm-scroller"><div class="cm-content" contenteditable="true"></div></div>
       </div>
     </div>
   </div>
@@ -161,6 +164,15 @@ const deadline = Date.now() + 40000;
              : 'no toolbar');
   say('and it carries the same controls as for an uploaded file',
       !!wbBar && !!wbBar.querySelector('.wb-title') && !!wbBar.querySelector('[data-act="refresh"]'));
+
+  // Measuring is not enough: a panel whose top band sits UNDER Overleaf's own
+  // bar has a perfectly good rectangle and takes no clicks there at all. Sample
+  // the very top of the panel, which is the part that gets covered.
+  const hostEl = document.getElementById('wolfbook-overleaf-host');
+  const hitTop = document.elementFromPoint(hostBox.left + 30, hostBox.top + 4);
+  say('nothing of Overleaf is painted over the panel',
+      !!hitTop && (hitTop === hostEl || hostEl.contains(hitTop)),
+      hitTop ? (hitTop.className || hitTop.tagName) : 'nothing there');
 
   const titleEl = shadow && shadow.querySelector('.wb-title');
   say('the file is identified from the Overleaf tab, nothing selected in the tree',
