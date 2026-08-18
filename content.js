@@ -467,7 +467,20 @@
    * fetched from the server, untruncated results, typeset maths. MCP is an AI
    * transport and gives a truncated text description of a picture.
    */
-  function makeServeEvaluator(getPort, getToken, askForToken) {
+  /**
+   * The reader's column width, in the em units BTL's line breaker expects.
+   *
+   * Only the client knows how wide the notebook is, and BTL does the breaking
+   * server-side, so this has to travel with every evaluation. The formula is
+   * the extension's own (controller.js pxToPageWidthEm): 80% of the width at a
+   * 16px base, so a result breaks the same way here as in the notebook editor.
+   */
+  function pageWidthEmOf(el) {
+    const px = el && el.clientWidth ? el.clientWidth : 0;
+    return px > 0 ? Math.floor((px * 0.80) / 16) : 0;
+  }
+
+  function makeServeEvaluator(getPort, getToken, askForToken, getPageWidthEm) {
     return {
       // Rewrite the kernel's relative img/ paths onto the server that wrote them.
       resolveAsset(rel) {
@@ -486,7 +499,16 @@
           if (!granted) throw new Error('No token — cell not evaluated.');
         }
 
-        const call = () => mcp({ cmd: 'serve-eval', args: { code, format: 'Auto', scale: 1.0 } });
+        const call = () => mcp({
+          cmd: 'serve-eval',
+          args: {
+            code, format: 'Auto', scale: 1.0,
+            // BTL breaks the LaTeX to this width on the server, the way the
+            // notebook editor does. Without it the result comes back as one
+            // unbreakable line.
+            pageWidthEm: getPageWidthEm ? getPageWidthEm() : 0,
+          },
+        });
         let res = await call();
         if (!res) throw new Error('The extension could not reach its background worker.');
 
@@ -938,7 +960,8 @@
           })
         : null;
 
-      evaluator = makeServeEvaluator(() => servePortNow, () => serveTokenNow, requestToken);
+      evaluator = makeServeEvaluator(() => servePortNow, () => serveTokenNow, requestToken,
+        () => pageWidthEmOf(body));
       attachToCoalition().catch((e) => log('coalition attach failed', e));
       // The first attempt fails whenever the token is not stored yet — and the
       // token is only asked for on evaluate — so keep trying rather than

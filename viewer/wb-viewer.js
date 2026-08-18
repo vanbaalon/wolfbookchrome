@@ -253,11 +253,15 @@ function typesetMath(root) {
  * invisible on screen, and dropped outright by fragmentHasContent — which is
  * why a Series, or any TeXForm result, looked like a cell that produced nothing.
  *
- * Line breaking is the second half. KaTeX will not break DISPLAY math at all,
- * so a long series ran off the side; in INLINE mode it breaks at top-level
- * relations and binary operators — exactly the + and - of a series — provided
- * the container lets it wrap. So these render inline and are allowed to wrap,
- * which is what makes a long result readable rather than clipped.
+ * LINE BREAKING IS NOT DONE HERE. The LaTeX arrives already broken by BTL on
+ * the server — \begin{aligned} with the continuations aligned on their leading
+ * operator — because BTL breaks with knowledge of the expression (delimiter
+ * depth, indent step, page width) and is what the notebook editor uses. KaTeX
+ * can only split inline math at top-level relations and binary operators, which
+ * knows nothing about structure: it will part a matrix row or an integrand from
+ * its measure, and cannot indent a continuation at all. So this renders what it
+ * is given, in display mode, and leaves the breaking to the tool that can see
+ * the expression.
  */
 function typesetDeferredLatex(root) {
   const nodes = root && root.querySelectorAll
@@ -276,7 +280,9 @@ function typesetDeferredLatex(root) {
     holder.className = 'wb-tex-body';
     try {
       holder.innerHTML = katex.renderToString(tex, {
-        displayMode: false,
+        // Display mode: BTL emits an `aligned` environment, whose alignment is
+        // the whole point of breaking there rather than anywhere.
+        displayMode: true,
         throwOnError: false,
         strict: false,
         trust: false,

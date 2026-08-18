@@ -129,7 +129,13 @@ try {
   // A LaTeX-formatted result arrives as an EMPTY div carrying base64 LaTeX,
   // which whoever renders it must typeset. Nothing here did, so such outputs
   // were invisible AND dropped as empty — a Series looked like a cell that had
-  // produced nothing. The payload below is a real one from wolfbook-serve.
+  // produced nothing.
+  //
+  // The payload is a real one from wolfbook-serve, ALREADY BROKEN BY BTL at
+  // 21em: an aligned environment with each continuation on its leading
+  // operator. The browser's job is to typeset those breaks, not to invent its
+  // own — KaTeX splits only at top-level operators and would part a matrix row
+  // from itself.
   const dl = await (await fetch('/fixtures/deferred-latex.json')).json();
   const narrow = document.createElement('div');
   narrow.style.width = '420px';                 // force the wrapping question
@@ -146,15 +152,23 @@ try {
       texEl ? (texEl.getAttribute('data-wb-typeset') || '?') : 'no .wb-tex-out');
   if (texEl) {
     const box = texEl.getBoundingClientRect();
-    // Wrapped = many lines rather than one long one. A single KaTeX line is
-    // ~20px, so a 60-term series that wrapped is far taller than that.
-    say('and it WRAPS instead of running off the side', box.height > 60,
-        Math.round(box.width) + 'x' + Math.round(box.height));
+    // BTL's breaks must survive as REAL rows. KaTeX renders an aligned
+    // environment as vlist rows, so a 43-break result is many lines tall.
+    say('BTL line breaks are rendered as separate lines', box.height > 200,
+        Math.round(box.width) + 'x' + Math.round(box.height)
+          + ' for ' + dl.breaks + ' breaks');
+    say('the alignment environment survived', !!texEl.querySelector('.katex .vlist'),
+        texEl.querySelector('.katex-display') ? 'display mode' : 'inline');
     // An atom too wide to break must scroll, not be clipped away.
     say('an unbreakable atom can still be reached',
         getComputedStyle(texEl).overflowX === 'auto',
         'overflow-x: ' + getComputedStyle(texEl).overflowX);
     say('the copy-LaTeX button survives typesetting', !!texEl.querySelector('.wb-copy-tex'));
+    // The copied source must be BTL's broken LaTeX, so pasting into Overleaf
+    // gives the same layout that is on screen.
+    const tex = texEl.querySelector('.wb-copy-tex').getAttribute('data-tex') || '';
+    say('copy LaTeX hands over the broken source', tex.indexOf('begin{aligned}') >= 0,
+        tex.slice(0, 26).trim());
   }
 
   // ── syntax highlighting ────────────────────────────────────────────────

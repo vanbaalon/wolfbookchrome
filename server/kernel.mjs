@@ -17,6 +17,10 @@ const require = createRequire(import.meta.url);
 /** Escape a filesystem path for embedding in a Wolfram string literal. */
 const wlPath = (p) => String(p).replace(/\\/g, '/').replace(/"/g, '\\"');
 
+// The extension's own default for this conversion
+// (notebook.rendering.lineBreaking.baseFontSizePx).
+const BASE_FONT_PX = 16;
+
 export class WolfbookKernel {
   /**
    * @param {{extensionDir, resourcesDir, kernelExecutable}} host
@@ -95,7 +99,9 @@ export class WolfbookKernel {
    * Evaluate one notebook cell and render it the way the notebook would.
    *
    * @param {string} code
-   * @param {{format?: string, scale?: number, timeoutMs?: number}} [opts]
+   * @param {{format?: string, scale?: number, timeoutMs?: number,
+   *          pageWidthEm?: number}} [opts] pageWidthEm is the READER's column
+   *          width, which only the client knows; without it nothing is broken.
    * @returns {Promise<{html, text, outN, messages, print, ms}>}
    */
   async evalCell(code, opts = {}) {
@@ -125,7 +131,7 @@ export class WolfbookKernel {
       }
 
       return {
-        html: this.boxesToLatex(html),
+        html: this.boxesToLatex(html, Number(opts.pageWidthEm) || 0),
         text: this._resultText(res),
         outN,
         messages,
@@ -154,8 +160,21 @@ export class WolfbookKernel {
    * already understands `data-latex-b64` (it is what the "copy LaTeX" button
    * reads), so sending LaTeX rather than pre-rendered markup keeps this server
    * free of a KaTeX dependency.
+   *
+   * LINE BREAKING IS BTL'S JOB TOO, and must not be left to the browser.
+   * KaTeX can only break inline math at top-level relations and binary
+   * operators, which mangles anything structured: it will happily split a
+   * matrix row or an integrand from its measure, and it cannot indent a
+   * continuation at all. BTL breaks the LaTeX with knowledge of the expression
+   * — delimiter depth, indent step, page width — and that is what the notebook
+   * editor shows, so doing it anywhere else means two different renderings of
+   * the same result. The breaks travel inside the LaTeX itself, so the browser
+   * still just typesets what it is given.
+   *
+   * @param {string} html
+   * @param {number} [pageWidthEm] the reader's column width; 0 = do not break
    */
-  boxesToLatex(html) {
+  boxesToLatex(html, pageWidthEm = 0) {
     if (!html || !html.includes('wllatex-boxes')) return html;
     if (!this.btl) {
       return html.replace(/<div class="vscode-wolfram-wllatex-boxes"[^>]*>\s*<\/div>/g,
@@ -174,11 +193,43 @@ export class WolfbookKernel {
           latex = out && out.latex;
           if (!latex) return whole;
         } catch (_) { return whole; }
+        latex = this.lineBreak(latex, pageWidthEm);
         const b64 = Buffer.from(latex, 'utf8').toString('base64');
         const keep = attrs.replace(/\s*data-boxes-b64="[^"]*"/, '');
         // Left EMPTY on purpose: the client typesets from data-latex-b64.
         return `<div class="vscode-wolfram-wllatex-prerendered"${keep} data-latex-b64="${b64}"></div>`;
       });
+  }
+
+  /**
+   * Break one LaTeX string to the reader's column width, using BTL.
+   *
+   * Options mirror the extension's defaults (controller.js `_getLineBreakOptions`)
+   * so a result breaks the same way in Overleaf as in the notebook editor.
+   * Failure is never fatal: an unbroken line still renders, it just runs wide.
+   *
+   * @param {string} latex
+   * @param {number} pageWidthEm  column width in em; 0 or less means leave it alone
+   */
+  lineBreak(latex, pageWidthEm) {
+    if (!latex || !(pageWidthEm > 0)) return latex;
+    if (!this.btl || typeof this.btl.lineBreakLatex !== 'function') return latex;
+    try {
+      const r = this.btl.lineBreakLatex(latex, {
+        pageWidth: Math.floor(pageWidthEm),
+        pageWidthPx: Math.floor(pageWidthEm * BASE_FONT_PX),
+        baseFontSizePx: BASE_FONT_PX,
+        indentStep: 2,
+        compact: false,
+        maxDelimDepth: 2,
+        maxIterations: 5,
+      });
+      if (typeof r === 'string') return r || latex;
+      if (r && typeof r === 'object') return r.result || latex;
+      return latex;
+    } catch (_) {
+      return latex;
+    }
   }
 
   /** Map an /img/ URL path back onto a file, refusing anything outside imageDir. */

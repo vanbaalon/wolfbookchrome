@@ -218,7 +218,12 @@ export async function startServer(opts = {}) {
         if (kernel.busy) return send(res, 409, { error: 'kernel busy' });
 
         emit('eval-start', { cellId: body.cellId ?? null });
-        const out = await kernel.evalCell(code, { format: body.format, scale: body.scale });
+        // pageWidthEm: the reader's column width in em. The server cannot know
+        // it — the notebook is in someone else's browser — so BTL leaves the
+        // LaTeX unbroken unless the client says how wide it may be.
+        const out = await kernel.evalCell(code, {
+          format: body.format, scale: body.scale, pageWidthEm: body.pageWidthEm,
+        });
         emit('eval-done', { cellId: body.cellId ?? null, outN: out.outN, ms: out.ms });
         return send(res, 200, { ...out, cellId: body.cellId ?? null });
       }

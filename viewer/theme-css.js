@@ -368,14 +368,14 @@ export const THEME_CSS = `
    permits wrapping — without both, a long series is a single unbreakable line
    that runs off the side of the panel. */
 .wb-tex-out {
-  display: block; white-space: normal; overflow-wrap: anywhere;
-  /* Wrapping handles the ordinary case, but a single atom — a fraction with a
-     twenty-digit denominator — can still be wider than the panel and cannot be
-     broken at all. Scrolling that is honest; clipping it is not. */
+  display: block;
+  /* The lines are BTL's, already placed; this only has to not fight them. An
+     expression still wider than the column — a single unbreakable atom — is
+     scrolled rather than clipped, as the notebook renderer does. */
   overflow-x: auto;
 }
-.wb-tex-out .katex { white-space: normal; }
-.wb-tex-out .katex-html { display: inline; }
+.wb-tex-out .katex-display { margin: 2px 0; text-align: left; }
+.wb-tex-out .katex-display > .katex { text-align: left; }
 /* The fallback when KaTeX cannot parse it: show the source, wrapped. */
 .wb-tex-out[data-wb-typeset="source"] {
   font-family: var(--vscode-editor-font-family); font-size: 12px;
