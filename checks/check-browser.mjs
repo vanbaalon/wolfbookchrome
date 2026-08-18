@@ -125,6 +125,38 @@ try {
   say('raw HTML in a markdown cell renders as an element',
       !!(mdCell && shadow.querySelector('.wb-cell-md sub')));
 
+  // ── deferred LaTeX outputs ─────────────────────────────────────────────
+  // A LaTeX-formatted result arrives as an EMPTY div carrying base64 LaTeX,
+  // which whoever renders it must typeset. Nothing here did, so such outputs
+  // were invisible AND dropped as empty — a Series looked like a cell that had
+  // produced nothing. The payload below is a real one from wolfbook-serve.
+  const dl = await (await fetch('/fixtures/deferred-latex.json')).json();
+  const narrow = document.createElement('div');
+  narrow.style.width = '420px';                 // force the wrapping question
+  narrow.className = 'wb-notebook';
+  shadow.appendChild(narrow);
+  const texStats = viewer.renderNotebook({ cells: [{
+    kind: 2, value: 'Series[Sin[x], {x, 0, 60}]', languageId: 'wolfram',
+    outputs: [{ items: [{ mime: 'x-application/wolfram-language-html', data: dl.html }] }],
+  }] }, narrow, {});
+  say('a deferred-LaTeX output is not dropped as empty', texStats.outputs === 1,
+      texStats.outputs + ' output(s)');
+  const texEl = narrow.querySelector('.wb-tex-out');
+  say('it is typeset with KaTeX', !!(texEl && texEl.querySelector('.katex')),
+      texEl ? (texEl.getAttribute('data-wb-typeset') || '?') : 'no .wb-tex-out');
+  if (texEl) {
+    const box = texEl.getBoundingClientRect();
+    // Wrapped = many lines rather than one long one. A single KaTeX line is
+    // ~20px, so a 60-term series that wrapped is far taller than that.
+    say('and it WRAPS instead of running off the side', box.height > 60,
+        Math.round(box.width) + 'x' + Math.round(box.height));
+    // An atom too wide to break must scroll, not be clipped away.
+    say('an unbreakable atom can still be reached',
+        getComputedStyle(texEl).overflowX === 'auto',
+        'overflow-x: ' + getComputedStyle(texEl).overflowX);
+    say('the copy-LaTeX button survives typesetting', !!texEl.querySelector('.wb-copy-tex'));
+  }
+
   // ── syntax highlighting ────────────────────────────────────────────────
   const codePre = shadow.querySelector('.wb-input pre');
   const tokens = shadow.querySelectorAll('.wb-input [class^="wl-hl-"]');

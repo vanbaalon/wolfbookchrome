@@ -363,6 +363,25 @@ export const THEME_CSS = `
   background: var(--wb-code-bg); padding: 1px 5px; border-radius: 4px;
 }
 
+/* A LaTeX result, typeset here from the kernel's deferred payload.
+   KaTeX only offers line breaks in INLINE mode, and only if the container
+   permits wrapping — without both, a long series is a single unbreakable line
+   that runs off the side of the panel. */
+.wb-tex-out {
+  display: block; white-space: normal; overflow-wrap: anywhere;
+  /* Wrapping handles the ordinary case, but a single atom — a fraction with a
+     twenty-digit denominator — can still be wider than the panel and cannot be
+     broken at all. Scrolling that is honest; clipping it is not. */
+  overflow-x: auto;
+}
+.wb-tex-out .katex { white-space: normal; }
+.wb-tex-out .katex-html { display: inline; }
+/* The fallback when KaTeX cannot parse it: show the source, wrapped. */
+.wb-tex-out[data-wb-typeset="source"] {
+  font-family: var(--vscode-editor-font-family); font-size: 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-muted);
+}
+
 /* ── live evaluation on the reader's own kernel ──────────────────────────── */
 
 .wb-input { position: relative; }

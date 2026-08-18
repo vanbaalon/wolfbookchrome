@@ -204,6 +204,9 @@ function fragmentHasContent(frag) {
       const style = (child.getAttribute('style') || '').replace(/\s/g, '');
       if (/display:none|visibility:hidden/i.test(style)) continue;
       if (VISUAL.has(child.tagName.toUpperCase())) return true;
+      // A deferred-LaTeX placeholder is empty until it is typeset; counting it
+      // as blank is what made LaTeX outputs vanish.
+      if (child.hasAttribute && child.hasAttribute('data-latex-b64')) return true;
       if (walk(child)) return true;
     }
     return false;
@@ -235,6 +238,56 @@ function typesetMath(root) {
       });
       span.classList.add('wb-math-done');
     } catch (_) { /* keep the source fallback */ }
+  }
+}
+
+/**
+ * Fill in the DEFERRED LaTeX outputs the kernel ships as placeholders.
+ *
+ * A LaTeX-formatted result does not arrive as markup. It arrives as
+ *
+ *   <div class="vscode-wolfram-wllatex-prerendered" data-latex-b64="..."></div>
+ *
+ * an EMPTY element carrying its LaTeX in base64, which the VS Code renderer
+ * typesets on arrival. Nothing here did, so every such output was an empty div:
+ * invisible on screen, and dropped outright by fragmentHasContent — which is
+ * why a Series, or any TeXForm result, looked like a cell that produced nothing.
+ *
+ * Line breaking is the second half. KaTeX will not break DISPLAY math at all,
+ * so a long series ran off the side; in INLINE mode it breaks at top-level
+ * relations and binary operators — exactly the + and - of a series — provided
+ * the container lets it wrap. So these render inline and are allowed to wrap,
+ * which is what makes a long result readable rather than clipped.
+ */
+function typesetDeferredLatex(root) {
+  const nodes = root && root.querySelectorAll
+    ? root.querySelectorAll('[data-latex-b64]:not([data-wb-typeset])')
+    : [];
+  for (const el of nodes) {
+    let tex = '';
+    try { tex = b64ToText(el.getAttribute('data-latex-b64') || ''); } catch (_) { continue; }
+    if (!tex) continue;
+
+    // Render into a child, NOT over innerHTML: sanitizeOutputHtml has already
+    // put the "copy LaTeX" button inside this element, and replacing the
+    // markup wholesale threw it away.
+    const doc = el.ownerDocument;
+    const holder = doc.createElement('span');
+    holder.className = 'wb-tex-body';
+    try {
+      holder.innerHTML = katex.renderToString(tex, {
+        displayMode: false,
+        throwOnError: false,
+        strict: false,
+        trust: false,
+      });
+      el.setAttribute('data-wb-typeset', '1');
+    } catch (_) {
+      holder.textContent = tex;        // the source beats showing nothing at all
+      el.setAttribute('data-wb-typeset', 'source');
+    }
+    el.insertBefore(holder, el.firstChild);
+    el.classList.add('wb-tex-out');
   }
 }
 
@@ -408,6 +461,7 @@ function renderLiveResult(live, res, doc, resolveAsset) {
     if (fragmentHasContent(frag)) {
       live.appendChild(frag);
       typesetMath(live);
+      typesetDeferredLatex(live);
       // The server hands back LaTeX rather than pre-rendered markup, so an empty
       // prerendered div still needs typesetting here.
       for (const host of live.querySelectorAll('.vscode-wolfram-wllatex-prerendered[data-latex-b64]')) {
@@ -754,6 +808,7 @@ export function renderNotebook(wb, container, opts = {}) {
         const { frag } = sanitizeOutputHtml(renderMarkdown(mdState.code), resolveAsset);
         el.appendChild(frag);
         typesetMath(el);
+        typesetDeferredLatex(el);
         // Fenced blocks that named a language (```wolfram / ~~~wolfram).
         for (const pre of el.querySelectorAll('pre.wb-md-code[data-lang]')) {
           highlight(pre, pre.getAttribute('data-lang'));
@@ -812,6 +867,8 @@ export function renderNotebook(wb, container, opts = {}) {
         pre.textContent = text.data;
         box.appendChild(pre);
       }
+      // Stored outputs carry the same deferred-LaTeX placeholders as live ones.
+      typesetDeferredLatex(box);
       stats.missingAssets += box.querySelectorAll('.wb-missing-asset').length;
       if (box.childNodes.length) { outputEls.push(box); stats.outputs++; }
     }
