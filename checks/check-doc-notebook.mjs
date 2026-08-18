@@ -49,13 +49,37 @@ const PAGE = `<!doctype html>
   <div class="file-tree" style="width:220px;border-right:1px solid #ccc">
     <ul>
       <li role="treeitem" aria-selected="false"><span class="entity-name">main.tex</span></li>
-      <li role="treeitem" aria-selected="true"><span class="entity-name">test.wb</span></li>
+      <li role="treeitem" aria-selected="false"><span class="entity-name">test.wb</span></li>
     </ul>
   </div>
   <div style="flex:1;display:flex;flex-direction:column">
-    <div role="tablist" style="display:flex;border-bottom:1px solid #ccc">
-      <div role="tab" aria-selected="false">main.tex</div>
-      <div role="tab" aria-selected="true">test.wb<button>&times;</button></div>
+    <!-- OVERLEAF'S OWN TAB MARKUP, pasted from a live session. There is no
+         role="tab" and no aria-selected anywhere in it, and the filename is
+         prefixed with U+200E (LEFT-TO-RIGHT MARK). Both details defeated the
+         generic tab probe, so with no download link to read the name from,
+         nothing identified the open file and the panel never mounted. Keep
+         this markup verbatim; it is the only record of what the site does. -->
+    <div class="editor-file-tabs" style="display:flex;border-bottom:1px solid #ccc">
+      <div class="editor-file-tab">
+        <div class="editor-file-tab-content">
+          <span class="editor-file-tab-icon"><span class="material-symbols file-tree-icon unfilled"
+            aria-hidden="true" translate="no">description</span></span>
+          <div class="editor-file-tab-path">\u200Emain.tex</div>
+          <div class="editor-file-tab-action"><button class="editor-file-tab-close-action"
+            aria-label="Close"><span class="material-symbols" aria-hidden="true"
+            translate="no">close</span></button></div>
+        </div>
+      </div>
+      <div class="editor-file-tab editor-file-tab-active">
+        <div class="editor-file-tab-content">
+          <span class="editor-file-tab-icon"><span class="material-symbols file-tree-icon unfilled"
+            aria-hidden="true" translate="no">description</span></span>
+          <div class="editor-file-tab-path">\u200Etest.wb</div>
+          <div class="editor-file-tab-action"><button class="editor-file-tab-close-action"
+            aria-label="Close"><span class="material-symbols" aria-hidden="true"
+            translate="no">close</span></button></div>
+        </div>
+      </div>
     </div>
     <!-- NO .file-view and NO download link: this is the doc case. Overleaf
          shows its ordinary editor, and the file is empty. -->
@@ -110,6 +134,10 @@ const deadline = Date.now() + 40000;
   }
 
   say('a .wb held as a doc still mounts a panel', !!shadow);
+  const titleEl = shadow && shadow.querySelector('.wb-title');
+  say('the file is identified from the Overleaf tab, nothing selected in the tree',
+      !!titleEl && titleEl.textContent === 'test.wb',
+      titleEl ? JSON.stringify(titleEl.textContent) : 'no title');
   const errBox = shadow && shadow.querySelector('.wb-error-box');
   say('an empty .wb is not reported as broken JSON', !errBox,
       errBox ? errBox.textContent.slice(0, 90) : '');

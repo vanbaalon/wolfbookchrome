@@ -54,7 +54,13 @@
   // case for us, and it means there is no .cm-editor to find, so the pane probe
   // must not depend on one.
 
-  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  // Bidi control characters are stripped, not just whitespace: Overleaf writes
+  // the tab filename as "\u200Etest.wb" (a LEFT-TO-RIGHT MARK, so a name in a
+  // right-to-left script still reads correctly). It is invisible, survives
+  // trim(), and would travel into filename comparisons and zip lookups.
+  const clean = (s) => (s || '')
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ').trim();
 
   /**
    * The binary-file view, which is what Overleaf shows for a .wb. Confirmed
@@ -94,6 +100,40 @@
 
   /** The filename shown by the active tab, if the tab bar exists. */
   function probeActiveTab() {
+    // Overleaf's OWN tab markup, captured from a live session:
+    //
+    //   <div class="editor-file-tab-content">
+    //     <span class="editor-file-tab-icon">…</span>
+    //     <div class="editor-file-tab-path">‎test.wb</div>
+    //     <div class="editor-file-tab-action"><button aria-label="Close">…
+    //
+    // Note what is NOT there: no role="tab", no aria-selected. The generic
+    // selectors below therefore matched nothing, and for a file with no
+    // download link to name it — i.e. any .wb Overleaf holds as a doc — the
+    // extension could not tell which file was open, so it never mounted.
+    const paths = [...document.querySelectorAll(
+      '.editor-file-tab-path, [class*="file-tab-path"]')];
+    if (paths.length) {
+      // Which tab is active is marked on an ANCESTOR, and that class name has
+      // changed before, so match the word rather than a specific class.
+      const isActive = (el) => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          if (n.getAttribute('aria-selected') === 'true') return true;
+          if (n.getAttribute('aria-current')) return true;
+          const cls = typeof n.className === 'string' ? n.className : '';
+          if (/\b(active|selected)\b/.test(cls)) return true;
+        }
+        return false;
+      };
+      const active = paths.find(isActive)
+        // A single tab is unambiguous whether or not it is flagged active.
+        || (paths.length === 1 ? paths[0] : null);
+      if (active) {
+        const m = clean(active.textContent).match(/[\w./+-]+\.[A-Za-z0-9]+/);
+        if (m) return m[0];
+      }
+    }
+
     const TAB_SELECTORS = [
       '[role="tab"][aria-selected="true"]',
       '[role="tablist"] .active',
