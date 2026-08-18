@@ -83,9 +83,19 @@ const PAGE = `<!doctype html>
     </div>
     <!-- NO .file-view and NO download link: this is the doc case. Overleaf
          shows its ordinary editor, and the file is empty. -->
-    <div id="panel-source-editor" style="flex:1;position:relative">
-      <div class="cm-editor" style="height:100%">
-        <div class="cm-scroller"><div class="cm-content" contenteditable="true"></div></div>
+    <!-- Overleaf's editor panel holds its OWN toolbar row as well as the
+         document. Mounting over the whole panel puts our toolbar exactly where
+         theirs already is, so ours is never seen — which is how a doc-backed
+         notebook came up with no toolbar while an uploaded one had one. The
+         panel must therefore be taken over at the DOCUMENT region only. -->
+    <div id="panel-source-editor" style="flex:1;position:relative;display:flex;flex-direction:column">
+      <div class="ol-cm-toolbar toolbar-editor" style="height:32px;background:#1e2a35;color:#fff">
+        Overleaf toolbar (Code / Visual / Editing)
+      </div>
+      <div class="cm-editor-wrapper" style="flex:1;position:relative">
+        <div class="cm-editor" style="height:100%">
+          <div class="cm-scroller"><div class="cm-content" contenteditable="true"></div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -134,6 +144,21 @@ const deadline = Date.now() + 40000;
   }
 
   say('a .wb held as a doc still mounts a panel', !!shadow);
+  // The panel must sit BELOW Overleaf's own toolbar, not on top of it.
+  const olBar = document.querySelector('.ol-cm-toolbar').getBoundingClientRect();
+  const hostBox = document.getElementById('wolfbook-overleaf-host').getBoundingClientRect();
+  say('the panel does not cover Overleaf toolbar', hostBox.top >= olBar.bottom - 1,
+      'host top ' + Math.round(hostBox.top) + ' vs toolbar bottom ' + Math.round(olBar.bottom));
+
+  const wbBar = shadow && shadow.querySelector('.wb-toolbar');
+  const barBox = wbBar && wbBar.getBoundingClientRect();
+  say('the notebook toolbar is visible', !!barBox && barBox.height > 10 && barBox.width > 100
+      && barBox.top >= hostBox.top - 1,
+      barBox ? Math.round(barBox.width) + 'x' + Math.round(barBox.height) + ' @ ' + Math.round(barBox.top)
+             : 'no toolbar');
+  say('and it carries the same controls as for an uploaded file',
+      !!wbBar && !!wbBar.querySelector('.wb-title') && !!wbBar.querySelector('[data-act="refresh"]'));
+
   const titleEl = shadow && shadow.querySelector('.wb-title');
   say('the file is identified from the Overleaf tab, nothing selected in the tree',
       !!titleEl && titleEl.textContent === 'test.wb',
@@ -158,6 +183,42 @@ const deadline = Date.now() + 40000;
     say('the first cell can be inserted',
         shadow.querySelectorAll('.wb-cell').length === 1,
         shadow.querySelectorAll('.wb-cell').length + ' cells');
+
+    // ── the three things that made a new cell unusable ──────────────────
+    const cell = shadow.querySelector('.wb-cell');
+
+    // Inserting opens the editor, which HIDES the <pre> — so assert that
+    // first, then close it to measure the read-only cell the user clicks.
+    say('the new cell opened its editor',
+        !!cell.__wbEditorHandle || !!shadow.querySelector('.wb-editor'),
+        cell.__wbEditorHandle ? 'CodeMirror mounted' : 'no editor');
+    if (cell.__wbEditorHandle) {
+      cell.__wbEditorHandle.view.dom.dispatchEvent(
+        new FocusEvent('focusout', { bubbles: true }));
+      await sleep(300);
+    }
+
+    const pre = cell && cell.querySelector('.wb-input pre');
+    const preBox = pre && pre.getBoundingClientRect();
+    say('an empty cell is tall enough to click',
+        !!preBox && preBox.height >= 12, preBox ? Math.round(preBox.height) + 'px' : 'no pre');
+
+    // The click target must actually be THIS pre — the insertion strip folds
+    // into the cell spacing and used to sit on top of the cell chrome.
+    const hitPre = preBox && shadow.elementFromPoint(preBox.left + 20, preBox.top + preBox.height / 2);
+    say('a click in the cell body reaches the cell, not the insert strip',
+        !!hitPre && (hitPre === pre || pre.contains(hitPre)),
+        hitPre ? (hitPre.className || hitPre.tagName) : 'nothing there');
+
+    // The per-cell controls: hover the cell, then ask what is under them.
+    cell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    const controls = cell.querySelector('.wb-cell-controls');
+    const btn = controls && controls.querySelector('button');
+    const bb = btn && btn.getBoundingClientRect();
+    const hitBtn = bb && shadow.elementFromPoint(bb.left + bb.width / 2, bb.top + bb.height / 2);
+    say('the move/delete controls are clickable, not covered by the strip',
+        !!hitBtn && (hitBtn === btn || btn.contains(hitBtn) || controls.contains(hitBtn)),
+        hitBtn ? (hitBtn.className || hitBtn.tagName) : 'nothing there');
 
     const saveBtn = shadow.querySelector('[data-act="save"]');
     let ready = Date.now() + 4000;

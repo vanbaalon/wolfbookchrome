@@ -512,6 +512,10 @@ function attachEditing(cellEl, input, pre, cellState, editing, doc, onRun) {
   const host = doc.createElement('div');
   host.className = 'wb-editor';
 
+  // Exposed so the caller can put the cursor in a cell it just created: a new
+  // cell you have to hunt for and click is not really "inserted here".
+  cellEl.__wbEdit = () => pre.click();
+
   pre.addEventListener('click', async () => {
     if (active) return;
     const mount = await editing.mount();
@@ -570,6 +574,8 @@ function attachMarkdownEditing(cellEl, state, editing, doc, repaint) {
     delete cellEl.__wbEditorHandle;
     repaint();
   };
+
+  cellEl.__wbEdit = () => cellEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
 
   cellEl.addEventListener('dblclick', async (ev) => {
     if (active) return;

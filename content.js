@@ -233,16 +233,27 @@
       if (pane) return pane;
     }
 
+    // 3. the text editor, if this file did open in one — i.e. a .wb Overleaf
+    //    holds as a DOC.
+    //
+    // THIS IS TRIED BEFORE the named panels below, and the order is the whole
+    // point: #panel-source-editor contains Overleaf's OWN toolbar row (the
+    // Code/Visual toggle and the review-mode menu) as well as the document. A
+    // panel covering all of it puts our toolbar in the same place as theirs,
+    // where it is simply not seen — which is exactly how a doc-backed notebook
+    // came up with no toolbar while an uploaded one had one. The binary branch
+    // above already mounts over the CONTENT region only (the .file-view's
+    // parent), so matching that here is what makes the two look the same.
+    const cm = document.querySelector('.cm-editor');
+    if (cm && cm.parentElement && isPaneSized(cm.parentElement)) return cm.parentElement;
+    if (cm && isPaneSized(cm)) return cm;
+
     // 2. known panels
     for (const sel of ['#panel-source-editor', '.ide-react-editor-content',
                        '[data-testid="editor-panel"]', '#editor']) {
       const el = document.querySelector(sel);
       if (el && isPaneSized(el)) return el;
     }
-
-    // 3. the text editor, if this file did open in one
-    const cm = document.querySelector('.cm-editor');
-    if (cm && cm.parentElement && isPaneSized(cm.parentElement)) return cm.parentElement;
 
     return null;
   }
@@ -1071,10 +1082,18 @@
         if (st.cell && st.code !== st.original) st.cell.value = st.code;
       }
       snapshot();
+      const before = parsed.cells.length;
       fn();
       structureDirty = true;
       rerenderFromModel();
       note.textContent = `${label} — ⌘Z to undo`;
+      // Put the cursor in a cell that was just created. Without this the new
+      // cell is an empty box you must find and click before you can type in it.
+      if (label === 'insert' && parsed.cells.length > before) {
+        const cells = nbRoot().querySelectorAll('.wb-cell');
+        const added = [...cells].find((el) => el.__wbState && !el.__wbState.code);
+        added?.__wbEdit?.();
+      }
     }
 
     const nbRoot = () => body.querySelector('.wb-notebook') || body;
@@ -1536,6 +1555,30 @@
       });
     }
 
+    /**
+     * Keep trying to join the coalition.
+     *
+     * Attaching once at mount was not enough in either direction: the server
+     * may not have been running yet when the notebook opened, and it may be
+     * restarted while the tab sits there. Both end with an agent being told the
+     * notebook does not exist while the user is looking straight at it. Attach
+     * is keyed on (project, file), so re-announcing costs nothing when nothing
+     * was lost.
+     */
+    let keepAttachedTimer = null;
+    function keepAttached() {
+      if (keepAttachedTimer) return;
+      keepAttachedTimer = setInterval(() => {
+        if (!document.getElementById(HOST_ID)) {
+          clearInterval(keepAttachedTimer);
+          keepAttachedTimer = null;
+          return;
+        }
+        if (attachedId) return;
+        attachToCoalition().catch(() => {});
+      }, 20_000);
+    }
+
     /** Tell wolfbook-serve this notebook exists, so agents can find it. */
     async function attachToCoalition() {
       const res = await mcp({
@@ -1636,6 +1679,31 @@
     });
 
     await render(false);
+
+    // Did the panel actually end up where a person can see it?
+    //
+    // A panel mounted over the wrong container looks like a MISSING FEATURE,
+    // not a bug: the notebook renders, so nothing throws, and the toolbar is
+    // simply somewhere off screen or behind Overleaf's own chrome. That went
+    // unnoticed until someone compared two files side by side. Measure it once
+    // and say so plainly.
+    requestAnimationFrame(() => {
+      const bar = root.querySelector('.wb-toolbar');
+      if (!bar) return;
+      const b = bar.getBoundingClientRect();
+      const h = host.getBoundingClientRect();
+      const hidden = b.height < 10 || b.width < 100
+        || b.bottom <= 0 || b.top >= window.innerHeight
+        || b.top < h.top - 2;
+      if (hidden) {
+        diagnose('the panel mounted, but its toolbar is not visible — the pane it '
+          + 'was mounted over is probably the wrong one\n'
+          + `  toolbar : ${JSON.stringify(b.toJSON ? b.toJSON() : { top: b.top, height: b.height })}\n`
+          + `  host    : ${JSON.stringify(h.toJSON ? h.toJSON() : { top: h.top, height: h.height })}\n`
+          + `  pane    : ${pane.tagName}${pane.id ? '#' + pane.id : ''}`
+          + `${pane.className ? '.' + String(pane.className).split(/\s+/).join('.') : ''}`);
+      }
+    });
   }
 
   // ── selection tracking ────────────────────────────────────────────────────

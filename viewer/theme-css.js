@@ -141,6 +141,10 @@ export const THEME_CSS = `
   min-width: 0;
   font-family: var(--vscode-editor-font-family); font-size: 13px;
   line-height: 1.45; white-space: pre; tab-size: 4;
+  /* An EMPTY cell has an empty <pre>, which is zero pixels tall — and clicking
+     the <pre> is what opens the editor. So a freshly inserted cell offered
+     nothing to click and could not be typed into at all. */
+  min-height: 1.45em;
 }
 .wb-notebook.wb-wrap .wb-input pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -216,6 +220,12 @@ export const THEME_CSS = `
   margin: -6px 0;              /* fold into the cell spacing when idle */
   z-index: 4;                  /* above cell chrome, which overhangs upward */
 }
+/* The strip stops short of the right margin: that column belongs to the cell
+   controls, and two hover targets sharing pixels is how the click went to the
+   wrong one. The pill stays centred on the NOTEBOOK, not on the shortened
+   strip, so nothing moves on screen. */
+.wb-gap { margin-right: 130px; }
+.wb-gap-pill { left: calc(50% + 65px); }
 .wb-gap-pill {
   position: absolute;
   top: 50%; left: 50%;
@@ -249,17 +259,23 @@ export const THEME_CSS = `
    the notebook's own content. */
 .wb-cell { position: relative; }
 .wb-cell-controls {
-  position: absolute; top: -10px; right: 6px;
+  position: absolute; top: 3px; right: 6px;
   display: flex; gap: 4px;
   opacity: 0; transition: opacity .12s ease;
   background: #fff; padding: 2px; border-radius: 6px;
   border: 1px solid var(--wb-border);
-  /* The bar overhangs the top of its cell, so it lands underneath the PREVIOUS
-     cell's box — later siblings paint over earlier ones. Raising it (and the
-     hovered cell with it) is what keeps it clickable. */
   z-index: 3;
 }
-.wb-cell:hover { z-index: 2; }
+/* THE HOVERED CELL MUST OUTRANK THE GAP (z-index 4), not merely its unhovered
+   neighbours.
+   z-index:2 here created a stacking context, which TRAPS the controls: their
+   own z-index:3 is then resolved inside that context, so no value could lift
+   them above the insertion strip. The strip overlaps them — it folds into the
+   cell spacing with a negative margin, and the controls used to overhang
+   upwards into it — so it silently swallowed every click on move/delete.
+   The controls now sit inside the cell instead of overhanging, and the hovered
+   cell outranks the strip, so the two no longer compete for the same clicks. */
+.wb-cell:hover { z-index: 6; }
 .wb-cell:hover .wb-cell-controls, .wb-cell-controls:focus-within { opacity: 1; }
 .wb-cell-controls button {
   font: 500 10px/1 var(--vscode-font-family);
