@@ -53,7 +53,10 @@ const PAGE = `<!doctype html>
 <meta name="ol-rootFolder" content='[{"_id":"${FOLDER_ID}","name":"rootFolder"}]'>
 <link rel="stylesheet" href="/content.css"></head>
 <body style="margin:0;font:14px system-ui">
-  <div role="tablist"><div role="tab" aria-selected="true">sample.wb</div></div>
+  <div role="tablist">
+    <div id="sampleTab" role="tab" aria-selected="true">sample.wb</div>
+    <div id="mainTab" role="tab" aria-selected="false">main.tex</div>
+  </div>
   <div class="file-tree">
     <ul>
       <li role="treeitem"><span class="entity-name">main.tex</span></li>
@@ -89,6 +92,7 @@ window.chrome = {
   },
 };
 </script>
+<script>window.__WB_AUTO_SAVE_MS = 120000;</script>
 <script>
 // Mimic Overleaf: an upload REPLACES the file entity, so the open file-view is
 // discarded and the app shows "no file is selected" until something re-selects
@@ -103,6 +107,21 @@ window.__dropSelection = () => {
   }
 };
 document.addEventListener('click', (ev) => {
+  // The extension should hold this click until a dirty notebook has saved,
+  // then replay it. Count only the replay that reaches Overleaf's handler.
+  if (ev.target.closest('#mainTab')) {
+    window.__mainTabActivations = (window.__mainTabActivations || 0) + 1;
+    document.getElementById('sampleTab').setAttribute('aria-selected', 'false');
+    document.getElementById('mainTab').setAttribute('aria-selected', 'true');
+    const old = document.querySelector('.file-view, .no-selection');
+    if (old) {
+      const editor = document.createElement('div');
+      editor.className = 'cm-editor';
+      editor.textContent = 'main.tex editor';
+      old.replaceWith(editor);
+    }
+    return;
+  }
   // Clicking the row re-opens the file, as Overleaf would.
   if (!ev.target.closest('#wbrow')) return;
   const empty = document.querySelector('.no-selection');
@@ -389,6 +408,93 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
           (shadow.querySelector('.wb-note')?.textContent || '').slice(0, 90));
     } else say('a cell was available for the ineffective-upload case', false);
   } catch (e) { say('the ineffective-upload case ran', false, String(e && e.message)); }
+
+  // ── dirty notebooks automatically save on the periodic timer ─────────
+  try {
+    await fetch('/__normal');
+    shadow.querySelector('[data-act="refresh"]').click();
+    await wait(3000);
+    const t4 = [...shadow.querySelectorAll('.wb-cell-code')]
+        .find(c => (c.__wbCode || '').includes('Range'));
+    if (!t4) throw new Error('no Range cell after refreshing the notebook');
+    window.__WB_AUTO_SAVE_MS = 1000;
+    t4.querySelector('.wb-input pre').click();
+    const d7 = Date.now() + 15000;
+    while (Date.now() < d7 && !t4.__wbEditorHandle) await wait(200);
+    t4.__wbEditorHandle.view.dispatch({
+      changes: { from: 0, to: t4.__wbEditorHandle.view.state.doc.length, insert: 'Range[888]' },
+    });
+    const beforePeriodic = (await (await fetch('/__uploads')).json()).length;
+
+    // Give the upload verification the new content-addressed Download link,
+    // including Overleaf's transient "nothing selected" handoff.
+    (async () => {
+      for (let i = 0; i < 60; i++) {
+        await wait(250);
+        const seen = await (await fetch('/__uploads')).json();
+        if (seen.length > beforePeriodic) {
+          const h = (await (await fetch('/__lasthash')).json()).hash;
+          window.__newHash = h;
+          document.getElementById('dl')?.setAttribute('href', '/project/${PROJECT_ID}/blob/' + h);
+          window.__dropSelection();
+          break;
+        }
+      }
+    })();
+
+    const d8 = Date.now() + 20000;
+    let afterPeriodic = [];
+    while (Date.now() < d8) {
+      afterPeriodic = await (await fetch('/__uploads')).json();
+      if (afterPeriodic.length > beforePeriodic && /Saved/.test(saveBtn.textContent)) break;
+      await wait(250);
+    }
+    say('a dirty notebook saves automatically on the periodic timer',
+        afterPeriodic.length === beforePeriodic + 1,
+        'uploads=' + (afterPeriodic.length - beforePeriodic));
+    const periodicallySaved = afterPeriodic[afterPeriodic.length - 1]
+      && JSON.parse(afterPeriodic[afterPeriodic.length - 1].content);
+    say('the periodic save contains the final editor text',
+        periodicallySaved?.cells?.some(c => c.value === 'Range[888]'));
+
+    // ── changing file tabs automatically saves first ───────────────────
+    window.__WB_AUTO_SAVE_MS = 120000;
+    t4.__wbEditorHandle.view.dispatch({
+      changes: { from: 0, to: t4.__wbEditorHandle.view.state.doc.length, insert: 'Range[889]' },
+    });
+    await wait(1200);
+    const beforeAuto = (await (await fetch('/__uploads')).json()).length;
+    document.getElementById('mainTab').click();
+    (async () => {
+      for (let i = 0; i < 60; i++) {
+        await wait(250);
+        const seen = await (await fetch('/__uploads')).json();
+        if (seen.length > beforeAuto) {
+          const h = (await (await fetch('/__lasthash')).json()).hash;
+          window.__newHash = h;
+          document.getElementById('dl')?.setAttribute('href', '/project/${PROJECT_ID}/blob/' + h);
+          window.__dropSelection();
+          break;
+        }
+      }
+    })();
+
+    const d9 = Date.now() + 25000;
+    while (Date.now() < d9 && !(window.__mainTabActivations > 0)) await wait(250);
+    const afterAuto = await (await fetch('/__uploads')).json();
+    say('switching tabs waits for an automatic save',
+        window.__mainTabActivations === 1 && afterAuto.length === beforeAuto + 1,
+        'tab activations=' + (window.__mainTabActivations || 0)
+          + ', uploads=' + (afterAuto.length - beforeAuto));
+    const autoSaved = afterAuto[afterAuto.length - 1]
+      && JSON.parse(afterAuto[afterAuto.length - 1].content);
+    say('the tab-change save contains the final editor text',
+        autoSaved?.cells?.some(c => c.value === 'Range[889]'));
+    await wait(700);
+    say('Overleaf changes tabs only after the save succeeds',
+        document.getElementById('mainTab').getAttribute('aria-selected') === 'true'
+          && !document.getElementById('wolfbook-overleaf-host'));
+  } catch (e) { say('the tab-change automatic-save case ran', false, String(e && e.message)); }
  } catch (err) {
   // Always report: a thrown check is a failed check, not a hung harness.
   say('the check ran to completion', false, String(err && err.message || err));
@@ -412,6 +518,7 @@ const server = http.createServer((req, res) => {
   if (url === '/__lasthash') return json({ hash: lastHash });
   if (url === '/__bump') { blobSha = 'bbb222'; return json({ ok: true }); }
   if (url === '/__blackhole') { blackhole = true; return json({ ok: true }); }
+  if (url === '/__normal') { blackhole = false; return json({ ok: true }); }
 
   // Overleaf's upload endpoint.
   if (req.method === 'POST' && url === `/project/${PROJECT_ID}/upload`) {

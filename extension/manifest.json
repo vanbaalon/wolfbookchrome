@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wolfbook for Overleaf",
-  "version": "0.3.7",
+  "version": "0.3.9",
   "description": "View, edit and run Wolfbook (.wb) notebooks \u2014 inside Overleaf, or standalone from a local file \u2014 against a local Wolfram kernel.",
   "icons": {
     "16": "icons/icon16.png",

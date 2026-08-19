@@ -30,6 +30,12 @@
   // rejected as belonging to the wrong attachment.
   let currentAgentRpcHandler = null;
   let currentAgentReattach = null;
+  // The mounted notebook publishes its save operation here. Overleaf handles
+  // file-tab clicks in the page after our capture listener, so we can save the
+  // current notebook before allowing that click to replace its editor buffer.
+  let currentAutoSave = null;
+  let currentAutoSaveTimer = null;
+  let replayingFileTabClick = false;
   let mountEpoch = 0;             // cancels async work from an older selected tab
   let lastDocFile = null;         // synchronise Overleaf's async text-buffer handoff
   let lastDocSource = null;
@@ -167,6 +173,76 @@
       }
     }
     return null;
+  }
+
+  /** Return the Overleaf file tab and filename involved in a click. */
+  function probeClickedFileTab(target) {
+    if (!(target instanceof Element)) return null;
+    const tab = target.closest([
+      '[role="tab"]',
+      '.editor-file-tab',
+      '[class*="editor-file-tab"]',
+    ].join(', '));
+    if (!tab) return null;
+    const path = tab.matches('.editor-file-tab-path, [class*="file-tab-path"]')
+      ? tab
+      : tab.querySelector('.editor-file-tab-path, [class*="file-tab-path"]');
+    const text = clean(path?.textContent || tab.getAttribute('aria-label') || tab.textContent);
+    const match = text.match(/[\w./+-]+\.[A-Za-z0-9]+/);
+    if (!match) return null;
+    const closesTab = !!target.closest([
+      'button[aria-label*="close" i]',
+      '.editor-file-tab-action',
+      '[class*="file-tab-action"]',
+    ].join(', '));
+    return { tab, target, fileName: match[0], closesTab };
+  }
+
+  /**
+   * Save a dirty Wolfbook before Overleaf changes or closes its file tab.
+   *
+   * This must run in the capture phase. Once Overleaf's React handler receives
+   * the click, a doc-backed notebook's CodeMirror buffer is no longer the one
+   * we are allowed to write, and a binary notebook may lose its blob/version
+   * link before the upload freshness check can inspect it.
+   */
+  async function saveBeforeFileTabChange(ev) {
+    if (replayingFileTabClick || !currentAutoSave) return;
+    const clicked = probeClickedFileTab(ev.target);
+    if (!clicked) return;
+    const leavesCurrent = clicked.fileName !== currentAutoSave.fileName || clicked.closesTab;
+    if (!leavesCurrent || !currentAutoSave.hasWork()) return;
+
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    const controller = currentAutoSave;
+    const saved = await controller.save({ automatic: true });
+    // A failed/conflicted save deliberately keeps the notebook open. Losing
+    // edits merely because the user clicked another tab would be worse than
+    // requiring them to resolve the visible save error first.
+    if (!saved || currentAutoSave !== controller) return;
+
+    replayingFileTabClick = true;
+    try {
+      // Uploading a binary notebook can make Overleaf rebuild the tab strip.
+      // Prefer the original click target, but reacquire the requested tab when
+      // React replaced that node during verification.
+      let replayTarget = clicked.target;
+      if (!replayTarget.isConnected) {
+        const paths = [...document.querySelectorAll(
+          '.editor-file-tab-path, [class*="file-tab-path"], [role="tab"]')];
+        const path = paths.find((el) => clean(el.textContent).includes(clicked.fileName));
+        const replacementTab = path?.closest([
+          '[role="tab"]', '.editor-file-tab', '[class*="editor-file-tab"]',
+        ].join(', ')) || path;
+        replayTarget = clicked.closesTab
+          ? replacementTab?.querySelector('button[aria-label*="close" i], .editor-file-tab-action, [class*="file-tab-action"]')
+          : replacementTab;
+      }
+      replayTarget?.click();
+    } finally {
+      queueMicrotask(() => { replayingFileTabClick = false; });
+    }
   }
 
   /** The file highlighted in the file tree. */
@@ -640,6 +716,11 @@
   // ── panel ─────────────────────────────────────────────────────────────────
   function teardown() {
     mountEpoch++;
+    if (currentAutoSaveTimer) {
+      clearTimeout(currentAutoSaveTimer);
+      currentAutoSaveTimer = null;
+    }
+    currentAutoSave = null;
     currentAgentRpcHandler = null;
     currentAgentReattach = null;
     if (currentAttachedId) {
@@ -1209,6 +1290,14 @@
         loadedSource = got.source;
         loadedBlobUrl = blobUrl;
         docBacked = nextDocBacked;
+        // A forced refresh deliberately replaces the in-memory notebook with
+        // Overleaf's copy. Its old structural-dirty/undo state must not survive
+        // that replacement, or the save button and automatic-save timer keep
+        // treating the freshly loaded notebook as modified.
+        if (force) {
+          structureDirty = false;
+          undoStack.length = 0;
+        }
         if (nextDocBacked) { lastDocFile = fileName; lastDocSource = got.source; }
         hasRendered = true;
 
@@ -1388,16 +1477,41 @@
       holdMessageUntil = Date.now() + ms;
     };
 
+    function saveWork() {
+      const edits = lastStats && lastStats.edits ? lastStats.edits() : new Map();
+      const outputWork = (lastStats?.cellStates || [])
+        .filter((c) => c.outputsStale && (c.liveResult || (c.cell?.outputs || []).length)).length;
+      return { edits, outputWork, dirty: !!(edits.size || structureDirty || outputWork) };
+    }
+
+    /** Keep one 30-second save pending while this notebook is dirty. */
+    function scheduleAutomaticSave(work = saveWork()) {
+      if (!isCurrentMount() || !work.dirty) {
+        if (currentAutoSaveTimer) clearTimeout(currentAutoSaveTimer);
+        currentAutoSaveTimer = null;
+        return;
+      }
+      if (currentAutoSaveTimer || savePromise) return;
+      // The override is used only by the browser harness. In Chrome's isolated
+      // content-script world it is absent, so production is always 30 seconds.
+      const delay = Math.max(1000, Number(globalThis.__WB_AUTO_SAVE_MS) || 30_000);
+      currentAutoSaveTimer = setTimeout(async () => {
+        currentAutoSaveTimer = null;
+        if (!isCurrentMount() || !saveWork().dirty) return;
+        await saveNotebook();
+      }, delay);
+    }
+
     /** Show the Save button as soon as anything is actually different. */
     function refreshSaveButton() {
+      const { edits, outputWork } = saveWork();
+      scheduleAutomaticSave({ edits, outputWork,
+        dirty: !!(edits.size || structureDirty || outputWork) });
       if (saveBtn.disabled || Date.now() < holdMessageUntil) return;
-      const edits = lastStats && lastStats.edits ? lastStats.edits() : new Map();
       const n = edits.size;
       // A cell that was merely RUN still needs saving — in both directions:
       // there may be a fresh result to write, or a stored output that no longer
       // matches its code and must not stay in the file.
-      const outputWork = (lastStats?.cellStates || [])
-        .filter((c) => c.outputsStale && (c.liveResult || (c.cell?.outputs || []).length)).length;
       saveBtn.hidden = n === 0 && !structureDirty && !outputWork;
       saveBtn.textContent = n === 0 && outputWork && !structureDirty
         ? (outputWork === 1 ? 'Save 1 result to Overleaf' : `Save ${outputWork} results to Overleaf`)
@@ -1407,11 +1521,11 @@
     }
     setInterval(refreshSaveButton, 800);
 
-    saveBtn.addEventListener('click', async () => {
-      const edits = lastStats.edits();
+    async function performSave() {
+      const edits = lastStats?.edits ? lastStats.edits() : new Map();
       const outputWorkNow = (lastStats?.cellStates || [])
         .some((c) => c.outputsStale && (c.liveResult || (c.cell?.outputs || []).length));
-      if (!edits.size && !structureDirty && !outputWorkNow) return;
+      if (!edits.size && !structureDirty && !outputWorkNow) return true;
 
       const prev = saveBtn.textContent;
       saveBtn.disabled = true;
@@ -1426,7 +1540,7 @@
           note.textContent = 'file changed in Overleaf since you opened it — press ⟳ first';
           holdMessage('Reload before saving', 6000);
           saveBtn.disabled = false;
-          return;
+          return false;
         }
 
         holdMessage('Saving…', 30000);
@@ -1479,14 +1593,14 @@
             note.textContent = `the open file is now "${openNow || 'none'}" — nothing was written`;
             holdMessage('Save cancelled', 6000);
             saveBtn.disabled = false;
-            return;
+            return false;
           }
           const res = await askBridge('set-editor-doc', 4000, { text, expect: loadedSource });
           if (!res || !res.ok) {
             note.textContent = res?.error || 'could not write into the Overleaf editor';
             holdMessage('Save failed', 6000);
             saveBtn.disabled = false;
-            return;
+            return false;
           }
           // The model IS what is on screen now, so mark it clean in place
           // rather than re-rendering and dropping live outputs and open editors.
@@ -1505,7 +1619,7 @@
           note.textContent = `saved into the Overleaf document (${(text.length / 1024).toFixed(1)} KB)`;
           refreshSaveButton();
           saveBtn.disabled = false;
-          return;
+          return true;
         }
 
         // Folder id, best source first: the project tree Overleaf itself
@@ -1615,7 +1729,7 @@
           } catch (_) {}
           suppressTeardownUntil = 0;
           saveBtn.disabled = false;
-          return;
+          return false;
         }
 
         // NO RE-RENDER: what is on screen already IS what was written, so
@@ -1631,14 +1745,37 @@
         saveBtn.disabled = false;
         refreshSaveButton();
         suppressTeardownUntil = 0;
+        return true;
       } catch (e) {
         suppressTeardownUntil = 0;
         note.textContent = `save failed: ${e.message}`;
         holdMessage('Save failed', 6000);
         log('save failed', e);
         saveBtn.disabled = false;
+        return false;
       }
-    });
+    }
+
+    let savePromise = null;
+    function saveNotebook() {
+      if (!savePromise) {
+        if (currentAutoSaveTimer) {
+          clearTimeout(currentAutoSaveTimer);
+          currentAutoSaveTimer = null;
+        }
+        savePromise = performSave().finally(() => {
+          savePromise = null;
+          if (isCurrentMount()) scheduleAutomaticSave();
+        });
+      }
+      return savePromise;
+    }
+    saveBtn.addEventListener('click', () => { void saveNotebook(); });
+    currentAutoSave = {
+      fileName,
+      hasWork: () => isCurrentMount() && saveWork().dirty,
+      save: saveNotebook,
+    };
     openBtn.addEventListener('click', async () => {
       if (!parsed) return;
       const prev = openBtn.textContent;
@@ -2079,6 +2216,10 @@
       subtree: true, childList: true,
       attributes: true, attributeFilter: ['class', 'aria-selected'],
     });
+    // Overleaf's file tabs are page-owned React controls. Capturing their click
+    // is the one point where the old notebook, its version link and (for text
+    // .wb files) its CodeMirror document are all still guaranteed to agree.
+    document.addEventListener('click', saveBeforeFileTabChange, true);
     sync();
 
     // Once the SPA has settled, report unconditionally if there is still no
