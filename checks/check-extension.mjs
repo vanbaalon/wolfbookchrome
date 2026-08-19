@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
+const extensionRoot = path.join(root, 'extension');
 const PROJECT_ID = '0123456789abcdef01234567';
 
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -276,7 +277,8 @@ const server = http.createServer((req, res) => {
     return;
   }
   // Serve the extension's own files (content.js, viewer/*, vendor/*).
-  const file = path.join(root, url);
+  const extensionFile = path.join(extensionRoot, url);
+  const file = fs.existsSync(extensionFile) ? extensionFile : path.join(root, url);
   if (file.startsWith(root) && fs.existsSync(file) && !fs.statSync(file).isDirectory()) {
     const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
                     '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };

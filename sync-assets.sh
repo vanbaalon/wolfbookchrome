@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copies the stylesheets the wolfbook VS Code renderer itself uses into vendor/.
+# Copies the stylesheets the wolfbook VS Code renderer itself uses into extension/vendor/.
 #
 # WHY: a .wb output is stored HTML that was produced BY that renderer — mostly
 # pre-rendered KaTeX (mord/pstrut/vlist spans) plus wolfbook's own custom
@@ -13,6 +13,8 @@
 # layout jump while fonts load.
 set -euo pipefail
 cd "$(dirname "$0")"
+VENDOR="extension/vendor"
+ICONS="extension/icons"
 
 CLIENT="../../../Extension Development/out/client"
 if [ ! -d "$CLIENT" ]; then
@@ -24,13 +26,13 @@ fi
 # katex.mjs is needed for MARKDOWN cells only. Stored code-cell outputs arrive
 # pre-rendered (the kernel already typeset them), but a markup cell's $…$ is
 # just source text, and physics notebooks are full of it.
-mkdir -p vendor
+mkdir -p "$VENDOR"
 # renderer-highlight.js is the extension's own Wolfram/LaTeX highlighter; it
 # emits the wl-hl-* classes WL_CSS already styles, so code cells look the way
 # they do in the notebook editor.
 for f in katex-css.js renderer-css.js katex.mjs renderer-highlight.js; do
-  cp "$CLIENT/$f" "vendor/$f"
-  printf '  %-18s %8d bytes\n' "$f" "$(wc -c < "vendor/$f")"
+  cp "$CLIENT/$f" "$VENDOR/$f"
+  printf '  %-18s %8d bytes\n' "$f" "$(wc -c < "$VENDOR/$f")"
 done
 
 # renderer-css.js kills console.log at import time (it is written for the
@@ -38,7 +40,7 @@ done
 # diagnostics to survive, so neutralise that one line in the vendored copy.
 python3 - <<'PY'
 import re, pathlib
-p = pathlib.Path('vendor/renderer-css.js')
+p = pathlib.Path('extension/vendor/renderer-css.js')
 src = p.read_text()
 patched = src.replace(
     "if (!DEV_MODE) { const _noop = () => {}; console.log = _noop; console.warn = _noop; }",
@@ -54,9 +56,9 @@ PY
 # pasted onto the toolbar. Downscaled because the panel draws it at 16px.
 for _logo in "$CLIENT/../icons/wolfbook_file_icon.png" "$CLIENT/../images/icon.png"; do
   if [ -f "$_logo" ]; then
-    sips -Z 48 "$_logo" --out vendor/wolfbook-icon.png >/dev/null 2>&1 \
+    sips -Z 48 "$_logo" --out "$VENDOR/wolfbook-icon.png" >/dev/null 2>&1 \
       && printf '  %-18s %8d bytes  (%s)\n' "wolfbook-icon.png" \
-           "$(wc -c < vendor/wolfbook-icon.png)" "$(basename "$_logo")"
+           "$(wc -c < "$VENDOR/wolfbook-icon.png")" "$(basename "$_logo")"
     break
   fi
 done
@@ -66,10 +68,10 @@ done
 # them it draws a grey letter tile.
 _src="$CLIENT/../icons/wolfbook_file_icon.png"
 if [ -f "$_src" ]; then
-  mkdir -p icons
+  mkdir -p "$ICONS"
   for s in 16 32 48 128; do
-    sips -Z $s "$_src" --out "icons/icon${s}.png" >/dev/null 2>&1 \
-      && printf '  %-18s %8d bytes\n' "icons/icon${s}.png" "$(wc -c < icons/icon${s}.png)"
+    sips -Z $s "$_src" --out "$ICONS/icon${s}.png" >/dev/null 2>&1 \
+      && printf '  %-18s %8d bytes\n' "extension/icons/icon${s}.png" "$(wc -c < "$ICONS/icon${s}.png")"
   done
 fi
 

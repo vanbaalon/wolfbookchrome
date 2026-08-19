@@ -29,6 +29,7 @@
   .status.warning .dot { background: #bf8700; }
   .status.offline .dot { background: #cf222e; }
   .status strong { color: #1f2328; }
+  .mcp-status { margin-top: 8px; padding-top: 8px; }
   .help { display: none; margin-top: 10px; padding: 9px 10px; border-radius: 6px;
           background: #fff8c5; color: #3b3200; }
   .help.visible { display: block; }
@@ -60,11 +61,18 @@
       <span>Click any .wb in a project — the panel appears there</span>
     </button>
     <div class="status"><span class="dot"></span><span class="text">checking the local server…</span></div>
-    <div class="help">
+    <div class="status mcp-status"><span class="dot"></span><span class="text">checking MCP notebook access…</span></div>
+    <div class="help mcp-help">
+      <strong>MCP cannot reach the notebook</strong>
+      <div style="margin-top:5px">Keep the <code>.wb</code> tab open in Overleaf and reload that browser tab.
+        The indicator above is green only after a real round trip reaches its editor.</div>
+    </div>
+    <div class="help server-help">
       <strong>Start the local server</strong>
       <ol>
         <li>Install the Wolfbook VS Code extension and Wolfram.</li>
-        <li>In Terminal, open this extension's folder and run:</li>
+        <li>In Terminal, open <code>VSCodeWolframExtension/WolfbookChromeExtension</code> —
+          one level above the <code>extension</code> folder selected with “Load unpacked” — then run:</li>
       </ol>
       <code class="command">node server/cli.mjs start</code>
       <button class="copy" data-act="copy-start">Copy command</button>

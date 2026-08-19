@@ -168,6 +168,13 @@ try {
       !!registration && (registration.notebooks || []).includes(attach.path),
       JSON.stringify(registration && registration.notebooks));
 
+  const routeStatus = await (await fetch(`${s.url}/v1/notebooks/status`, {
+    headers: { 'X-Wolfbook-Token': s.token },
+  })).json();
+  say('status proves the complete reverse route reaches the tab',
+      routeStatus.notebooks?.[0]?.reachable === true && seen.includes('ping'),
+      JSON.stringify(routeStatus.notebooks));
+
   // ── the tools an agent would actually use ────────────────────────────────
   const ctx = await invoke('wolfbook_getNotebookContext', {});
   say('an agent can read the notebook', /Range\[3\]/.test(textOf(ctx)), textOf(ctx).split('\n')[0]);

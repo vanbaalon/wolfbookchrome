@@ -10,7 +10,7 @@
 // large, and highlighting is all we need — a full parse would buy folding and
 // structural selection at a cost far beyond this feature.
 
-import { WL_BUILTINS } from '../vendor/wl-builtins.js';
+import { WL_BUILTINS } from '../extension/vendor/wl-builtins.js';
 
 const isSymbolChar = (ch) => /[A-Za-z0-9$]/.test(ch);
 

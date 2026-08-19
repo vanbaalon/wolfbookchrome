@@ -257,6 +257,13 @@ export async function startServer(opts = {}) {
         return send(res, 200, { notebooks: registry.paths() });
       }
 
+      // Used by the extension popup. Unlike /v1/notebooks, this sends a ping
+      // over the complete server → service worker → content-script route, so a
+      // green result means an MCP tool can really reach that open editor.
+      if (url.pathname === '/v1/notebooks/status' && req.method === 'GET') {
+        return send(res, 200, { notebooks: await registry.status(1800) });
+      }
+
       // The tab answering a reverse RPC.
       if (url.pathname.startsWith('/v1/rpc/') && req.method === 'POST') {
         const id = url.pathname.slice('/v1/rpc/'.length);

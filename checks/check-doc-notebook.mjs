@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
+const extensionRoot = path.join(root, 'extension');
 const PROJECT_ID = '0123456789abcdef01234567';
 
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -149,14 +150,43 @@ cmContents[1].cmView = {
   },
 };
 
+const runtimeListeners = [];
+const attachedByFile = {};
+window.__attachedByFile = attachedByFile;
+window.__sendRuntime = (message) => new Promise((resolve) => {
+  for (const listener of runtimeListeners) {
+    let answered = false;
+    const reply = (value) => { if (!answered) { answered = true; resolve(value); } };
+    const asyncReply = listener(message, {}, reply);
+    if (asyncReply === true || answered) return;
+  }
+  resolve(null);
+});
 window.chrome = {
+  storage: { local: {
+    get(key, cb) { cb({ [key]: key === 'wbServeToken' ? 'test-token' : null }); },
+    set(_value, cb) { if (cb) cb(); },
+  } },
   runtime: {
     // A live extension always has an id; content.js treats its absence as
     // an orphaned content script (the extension reloaded under the tab).
     id: 'wolfbook-check',
     lastError: null,
     getURL: (p) => '/' + String(p).replace(/^\\//, ''),
-    sendMessage: (msg, cb) => { if (typeof cb === 'function') cb({ ok: true, connected: false }); },
+    onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
+    sendMessage: (msg, cb) => {
+      if (typeof cb !== 'function') return;
+      if (msg.cmd === 'serve-status') {
+        cb({ ok: true, connected: true, running: true, port: 27300, authorised: true,
+             info: { versions: {} } });
+      } else if (msg.cmd === 'serve-attach') {
+        const file = msg.notebook.fileName;
+        attachedByFile[file] ||= 'nb-' + Object.keys(attachedByFile).length;
+        cb({ ok: true, result: { notebookId: attachedByFile[file], path: 'overleaf:test/' + file,
+                                 routeBound: true } });
+      } else if (msg.cmd === 'serve-detach') cb({ ok: true });
+      else cb({ ok: true, connected: false });
+    },
   },
 };
 </script>
@@ -234,6 +264,13 @@ const deadline = Date.now() + 40000;
       && /Wave notebook/.test(switchedShadow?.querySelector('.wb-notebook')?.textContent || ''),
       (switchedShadow?.querySelector('.wb-title')?.textContent || 'no title') + ' / '
       + (switchedShadow?.querySelector('.wb-notebook')?.textContent || '').slice(0, 30));
+  const waveRoute = await window.__sendRuntime({
+    cmd: 'wb-rpc',
+    req: { notebookId: window.__attachedByFile['WaveFunctionDemo.wb'], method: 'ping' },
+  });
+  say('MCP routing follows the current tab after a notebook remount',
+      waveRoute?.handled === true && waveRoute?.result?.path === 'WaveFunctionDemo.wb',
+      JSON.stringify(waveRoute));
 
   docTabs.forEach((t, i) => t.classList.toggle('editor-file-tab-active', i === 1));
   setTimeout(() => { window.__cmDoc.text = ''; }, 700);
@@ -474,7 +511,8 @@ const server = http.createServer((req, res) => {
     res.end(PROJECT_ZIP);
     return;
   }
-  const file = path.join(root, url);
+  const extensionFile = path.join(extensionRoot, url);
+  const file = fs.existsSync(extensionFile) ? extensionFile : path.join(root, url);
   if (file.startsWith(root) && fs.existsSync(file) && !fs.statSync(file).isDirectory()) {
     const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
                     '.json': 'application/json', '.png': 'image/png' };

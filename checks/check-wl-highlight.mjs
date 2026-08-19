@@ -1,6 +1,6 @@
 // Unit checks for the Wolfram tokenizer (viewer/wl-highlight.js).
-import { highlightWolfram } from '../viewer/wl-highlight.js';
-import { WL_BUILTINS } from '../vendor/wl-builtins.js';
+import { highlightWolfram } from '../extension/viewer/wl-highlight.js';
+import { WL_BUILTINS } from '../extension/vendor/wl-builtins.js';
 
 let failures = 0;
 const check = (label, cond, extra) => {

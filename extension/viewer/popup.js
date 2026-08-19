@@ -15,6 +15,10 @@ const openTab = (url) => {
   window.close();
 };
 
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]));
+
 document.querySelector('[data-act=open]').addEventListener('click', () => {
   openTab(chrome.runtime.getURL('viewer/standalone.html'));
 });
@@ -47,6 +51,9 @@ setVersion('chrome', chrome.runtime.getManifest().version);
 // Local-server status and the versions of the exact native binaries it loaded.
 const status = document.querySelector('.status');
 const text = status.querySelector('.text');
+const mcpStatus = document.querySelector('.mcp-status');
+const mcpText = mcpStatus.querySelector('.text');
+const mcpHelp = document.querySelector('.mcp-help');
 chrome.runtime.sendMessage({ cmd: 'serve-status' }, (res) => {
   void chrome.runtime.lastError;
   const running = !!(res?.ok && (res.connected || res.running));
@@ -58,7 +65,35 @@ chrome.runtime.sendMessage({ cmd: 'serve-status' }, (res) => {
   } else {
     status.classList.add('offline');
     text.innerHTML = '<strong>Local server not running</strong> — notebooks open read-only';
-    document.querySelector('.help').classList.add('visible');
+    document.querySelector('.server-help').classList.add('visible');
+  }
+
+  const notebooks = Array.isArray(res?.notebooks) ? res.notebooks : null;
+  const reachable = notebooks?.filter((nb) => nb?.reachable) || [];
+  const names = reachable.map((nb) => nb.fileName || nb.activeFile || nb.path).filter(Boolean);
+  if (!running) {
+    mcpStatus.classList.add('offline');
+    mcpText.innerHTML = '<strong>MCP unavailable</strong> — start the local server';
+  } else if (!res.authorised) {
+    mcpStatus.classList.add('warning');
+    mcpText.innerHTML = '<strong>MCP not connected</strong> — token needed on first run';
+  } else if (notebooks === null) {
+    mcpStatus.classList.add('warning');
+    mcpText.innerHTML = '<strong>MCP status unavailable</strong> — restart wolfbook-serve';
+    mcpHelp.classList.add('visible');
+  } else if (reachable.length) {
+    mcpStatus.classList.add('live');
+    mcpText.innerHTML = `<strong>MCP connected</strong> — ${names.map(escapeHtml).join(', ')}`
+      + (reachable.length === 1 ? ' is reachable by agents' : ' are reachable by agents');
+  } else if (notebooks.length) {
+    mcpStatus.classList.add('offline');
+    const registered = notebooks.map((nb) => nb.fileName || nb.path).filter(Boolean);
+    mcpText.innerHTML = `<strong>MCP disconnected</strong> — ${registered.map(escapeHtml).join(', ')}`
+      + ' is registered but its tab cannot be reached';
+    mcpHelp.classList.add('visible');
+  } else {
+    mcpStatus.classList.add('warning');
+    mcpText.innerHTML = '<strong>MCP not attached</strong> — open a .wb tab in Overleaf';
   }
 
   const health = res?.health || {};

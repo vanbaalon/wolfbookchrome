@@ -2,7 +2,7 @@
   "name": "wolfbook-overleaf-editor",
   "private": true,
   "type": "module",
-  "description": "CodeMirror 6 bundle for the Wolfbook Overleaf viewer. Build with ./build.sh; the output vendor/codemirror.bundle.js is committed so the extension needs no build step to load.",
+  "description": "CodeMirror 6 bundle for the Wolfbook Overleaf viewer. Build with ./build.sh; the output extension/vendor/codemirror.bundle.js is committed so the extension needs no build step to load.",
   "devDependencies": {
     "@codemirror/autocomplete": "^6",
     "@codemirror/commands": "^6",

@@ -84,14 +84,14 @@ export class NotebookRegistry {
    * Ask the tab to do something and wait for its answer.
    * Bounded, so a wedged tab surfaces as a tool error rather than a hung agent.
    */
-  call(nb, method, params = {}) {
+  call(nb, method, params = {}, timeoutMs = RPC_TIMEOUT_MS) {
     if (!nb || !nb.subscriber) return Promise.reject(new Error('that notebook is no longer open'));
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`the Overleaf tab did not answer "${method}" within ${RPC_TIMEOUT_MS / 1000}s`));
-      }, RPC_TIMEOUT_MS);
+        reject(new Error(`the Overleaf tab did not answer "${method}" within ${timeoutMs / 1000}s`));
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
         nb.subscriber.write(`event: rpc\ndata: ${JSON.stringify({ id, notebookId: nb.id, method, params })}\n\n`);
@@ -101,6 +101,28 @@ export class NotebookRegistry {
         reject(new Error('could not reach the Overleaf tab'));
       }
     });
+  }
+
+  /** End-to-end reachability, not merely the server's remembered registry. */
+  async status(timeoutMs = 2000) {
+    return Promise.all([...this.notebooks.values()].map(async (nb) => {
+      try {
+        const reply = await this.call(nb, 'ping', {}, timeoutMs);
+        return {
+          path: nb.path,
+          fileName: nb.fileName,
+          reachable: true,
+          activeFile: reply?.path || nb.fileName,
+        };
+      } catch (e) {
+        return {
+          path: nb.path,
+          fileName: nb.fileName,
+          reachable: false,
+          error: String(e?.message || e),
+        };
+      }
+    }));
   }
 
   /** The tab's answer, from POST /v1/rpc/<id>. */

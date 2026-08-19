@@ -18,7 +18,8 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
+const repoRoot = path.resolve(here, '..');
+const root = path.join(repoRoot, 'extension');
 
 // Page modules: ES modules that touch `document` / `location` the moment they
 // load, because they ARE the page rather than a library it uses. Importing one
@@ -95,6 +96,29 @@ if (/chrome\.tabs\.query\(\{\}\)/.test(backgroundSource)) {
   ok('background has an unfiltered tab-query fallback');
 } else {
   bad('background has an unfiltered tab-query fallback');
+}
+
+// The public install guide must follow the repository's real split layout.
+// This used to tell people to load the repository root and then to run a
+// server-relative command from an unspecified directory; both instructions
+// became wrong as soon as the runtime moved under extension/.
+const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+if (/Load unpacked[\s\S]{0,160}extension\//i.test(readme)
+    && /folder containing\s+`manifest\.json`/i.test(readme)) {
+  ok('README loads the unpacked extension from extension/');
+} else {
+  bad('README loads the unpacked extension from extension/', 'installation path is unclear');
+}
+if (/cd \/path\/to\/wolfbookchrome[\s\S]{0,120}node server\/cli\.mjs start/.test(readme)
+    && /alternative to `start`/.test(readme)) {
+  ok('README runs the server from the repository root and separates enable');
+} else {
+  bad('README server commands match the repository layout', 'root or start/enable guidance is unclear');
+}
+if (/Reload any Overleaf project tabs that were already open/.test(readme)) {
+  ok('README includes the required Overleaf-tab reload');
+} else {
+  bad('README includes the required Overleaf-tab reload');
 }
 
 // No stray control characters in shipped source.

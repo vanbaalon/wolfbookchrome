@@ -8,7 +8,11 @@ notebook output with no VS Code window open.
 Status: **M1 done** — verified end to end against a live kernel, and already
 driving the Overleaf Chrome extension.
 
+The commands below are run from the `server` folder inside the cloned
+`WolfbookChromeExtension` repository:
+
 ```bash
+cd /path/to/WolfbookChromeExtension/server
 node server.mjs                     # prints its URL and a token
 node checks/check-server.mjs        # end-to-end, needs a real kernel
 node check-installed-extension.mjs  # the original feasibility spike
@@ -44,6 +48,8 @@ evaluation. Correct for agents, wrong for a notebook client. Measured here:
 GET  /health         liveness + server/Wolfbook/WSTP/BTL/Wolfram versions
                        (no token — for discovery and the extension popup)
 GET  /v1/info        versions, paths, kernel source, uptime
+GET  /v1/notebooks/status
+                     end-to-end MCP reachability for each open Overleaf notebook
 POST /v1/eval        {code, cellId?, format?, scale?}
                        → {html, text, outN, messages[], print[], ms}
 POST /v1/interrupt   abort the running evaluation
@@ -94,7 +100,7 @@ Both cost real time to find; neither raises an error.
 
 ## Wired to the Overleaf extension
 
-Done. `quests/Q18_anharmonic_spectrum/WolfbookChromeExtension` prefers this
+Done. `WolfbookChromeExtension` at the workspace root prefers this
 server over MCP whenever it answers, and its
 `checks/check-serve-integration.mjs` drives the whole chain — Overleaf page →
 extension → this server → a real kernel → an SVG loaded in the browser at

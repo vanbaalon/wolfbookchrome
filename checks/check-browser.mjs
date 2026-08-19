@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
+const extensionRoot = path.join(root, 'extension');
 const wantShot = process.argv.includes('--screenshot');
 
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -299,7 +300,8 @@ root.querySelector('.wb-note').textContent =
     res.end(PAGE.replace('"__ASSETS__"', JSON.stringify(assets)));
     return;
   }
-  const file = path.join(root, url);
+  const extensionFile = path.join(extensionRoot, url);
+  const file = fs.existsSync(extensionFile) ? extensionFile : path.join(root, url);
   if (!file.startsWith(root) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404); res.end('not found'); return;
   }

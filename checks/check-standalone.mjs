@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
+const extensionRoot = path.join(root, 'extension');
 
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!fs.existsSync(CHROME)) {
@@ -116,7 +117,8 @@ const server = http.createServer((req, res) => {
     return;
   }
   const url = decodeURIComponent(req.url.split('?')[0]);
-  const file = path.join(root, url);
+  const extensionFile = path.join(extensionRoot, url);
+  const file = fs.existsSync(extensionFile) ? extensionFile : path.join(root, url);
   if (!file.startsWith(root) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404); res.end('not found'); return;
   }

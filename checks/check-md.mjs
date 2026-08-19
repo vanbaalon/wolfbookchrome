@@ -5,7 +5,7 @@
 // <br>, <details>. Sanitising is the VIEWER's job (wb-viewer runs this output
 // through the same sanitiser as stored outputs), so the assertions here are
 // about markdown correctness, and check-browser.mjs proves the sanitising.
-import { renderMarkdown } from '../viewer/md.js';
+import { renderMarkdown } from '../extension/viewer/md.js';
 
 let failures = 0;
 const check = (label, cond, extra) => {

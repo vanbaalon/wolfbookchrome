@@ -9,7 +9,22 @@
   against the Wolfram kernel on your own machine.
 </p>
 
+<p align="center">
+  <a href="docs/wolfbook-overleaf-demo.mp4"><strong>▶ Watch the video demonstration</strong></a>
+</p>
+
 ---
+
+## Repository layout
+
+```text
+WolfbookChromeExtension/
+├── extension/   ← select this folder with Chrome's “Load unpacked”
+├── server/      ← local Wolfram evaluation and MCP bridge
+├── checks/      ← automated checks
+├── docs/        ← documentation and demonstration media
+└── README.md
+```
 
 Overleaf treats a `.wb` file as a binary blob: it shows **“Sorry, no preview is
 available”** and offers a download button. This extension replaces that dead
@@ -24,15 +39,15 @@ results come back from your own kernel.
 This is worth stating plainly, because the extension talks to a Wolfram kernel
 and that sounds like it might involve a server somewhere. It does not.
 
-- **There is no cloud service, no telemetry, and no account.** The extension
-  sends nothing anywhere, and there is nothing to sign up for.
+- **There is no Wolfbook-operated cloud service, telemetry, or account.** The
+  extension talks only to Overleaf and services on your own machine.
 - The notebook is fetched **from Overleaf, by your own browser**, over the
   session you are already signed into — the same request Overleaf's own
   Download button makes.
 - Evaluation runs on **`127.0.0.1`**, on the machine you are sitting at, against
   the Wolfram kernel you installed. Your code and results never traverse the
-  network. If your machine is offline, everything except loading the file from
-  Overleaf still works.
+  network. Locally opened notebooks still work offline; loading from or saving
+  to Overleaf naturally requires an internet connection.
 - Nothing is written back to Overleaf unless **you** press **Save**.
 
 The only outbound traffic is to `overleaf.com`, the site you already have open.
@@ -49,45 +64,111 @@ The only outbound traffic is to `overleaf.com`, the site you already have open.
 | **Standalone** | A `.wb` that is not in Overleaf at all — in `~/Downloads`, or attached to an email — opens in its own tab. Same renderer, same optional kernel. |
 | **AI access** | Optionally, agents speaking MCP can read, run and edit the open notebook. Saving is never theirs to do. |
 
-## Install
+## Installation
 
-1. **Download or clone this repository.**
-2. Chrome → `chrome://extensions` → turn on **Developer mode** →
-   **Load unpacked** → choose this folder.
-3. Open an Overleaf project containing a `.wb` file and click it — or click the
-   **Wolfbook icon** in the toolbar to open a `.wb` from your own computer.
+### 1. Download the repository
 
-That is all that is needed for viewing. There is no build step: everything the
-browser needs is committed.
-
-The toolbar popup reports whether the local server is running and shows the
-versions of `wolfbook-serve`, Wolfbook, WSTP and BTL that are actually in use.
-If the server is stopped, the same popup gives the exact start and enable-at-login
-commands; notebooks remain available read-only.
-
-> Upload the notebook's `img/<notebook-name>/` folder to your Overleaf project
-> as well, or plots will show as “not in this Overleaf project” placeholders —
-> Overleaf has no way to know those files belong to the notebook.
-
-### To run and edit cells
-
-You need the **Wolfbook VS Code extension installed** — though it does not have
-to be running, and no window has to be open. The local server borrows its
-Wolfram integration:
+Clone it:
 
 ```bash
-cd server
-node cli.mjs start      # prints a URL and a token
-node cli.mjs enable     # optional: start it at login
-node cli.mjs token      # print the token again
+git clone https://github.com/vanbaalon/wolfbookchrome.git
+cd wolfbookchrome
 ```
 
-The first time you press ▶, the panel asks for that token once and remembers it.
-It is not optional: every request to the server evaluates arbitrary Wolfram
-code, so a web page that merely guesses the port must not get through.
+Alternatively, download and extract GitHub's ZIP. In the instructions below,
+the **repository root** means the extracted folder containing `README.md`,
+`extension/`, and `server/`; its actual folder name does not matter.
 
-Requirements: **Node 18+**, **Wolfram Mathematica or Wolfram Engine**, and the
-Wolfbook VS Code extension.
+### 2. Load the Chrome extension
+
+1. Open `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the repository's **`extension/` folder** — the folder containing
+   `manifest.json`. Do not select the repository root or `server/`.
+5. Reload any Overleaf project tabs that were already open.
+
+There is no build or `npm install` step. Everything Chrome needs is committed
+inside `extension/`.
+
+When updating an existing checkout, pull the changes, click **Reload** on the
+extension's card in `chrome://extensions`, and then reload the Overleaf tab. If
+an older installation selected the repository root, remove that entry and use
+**Load unpacked** again with `extension/`.
+
+### 3. View, edit, and save a notebook
+
+Open an Overleaf project containing a `.wb` file and click its file tab. The
+notebook replaces Overleaf's normal editor pane while Overleaf's file tabs stay
+visible. Viewing, editing cells, and pressing **Save to Overleaf** do not require
+the local server.
+
+To open a `.wb` from your computer instead, click the **Wolfbook icon** in
+Chrome's toolbar and choose **Open a notebook…**.
+
+> If a notebook refers to external image files, upload its
+> `img/<notebook-name>/` folder to the Overleaf project too. Missing files are
+> shown as placeholders. Newly evaluated plots are embedded in the saved
+> notebook and do not need a separate sidecar folder.
+
+### 4. Enable local Wolfram evaluation (optional)
+
+Running cells requires:
+
+- Node.js 18 or newer;
+- Wolfram Mathematica or Wolfram Engine; and
+- the [Wolfbook VS Code extension](https://github.com/vanbaalon/wolfbook)
+  installed in VS Code.
+
+VS Code does not need to be open merely to evaluate cells: `wolfbook-serve`
+loads the installed Wolfbook runtime and native addons directly.
+
+In Terminal, change to the **repository root**, not `extension/` or `server/`:
+
+```bash
+cd /path/to/wolfbookchrome
+node server/cli.mjs start
+node server/cli.mjs status
+```
+
+`start` launches the server in the background for the current login session.
+On macOS or Linux, have the operating system start and supervise it
+automatically instead by using this as an alternative to `start`:
+
+```bash
+node server/cli.mjs enable
+```
+
+`enable` records the repository's current absolute path in the operating-system
+service definition. If you move the checkout later, run `enable` again from its
+new repository root.
+
+The first time you press **▶ Run**, paste the token printed by `start` or
+`enable`. To print it again, run this from the repository root:
+
+```bash
+node server/cli.mjs token
+```
+
+The token is required because the server can evaluate arbitrary Wolfram code.
+It is stored by the extension after the first successful connection. The
+toolbar popup should now show **Local server running** in green.
+
+### 5. Enable AI/MCP notebook access (optional)
+
+Agent access additionally requires the main Wolfbook MCP server, normally
+provided by an open VS Code window running the Wolfbook extension and configured
+for your MCP client. Keep the desired `.wb` tab open in Overleaf. The popup's
+MCP line names notebooks whose live browser editors answer the bridge check.
+
+MCP agents can read, insert, edit, move, and run cells, but their changes remain
+unsaved in the browser. Only the person using Overleaf can press **Save to
+Overleaf**.
+
+The toolbar popup also shows the exact versions of `wolfbook-serve`, Wolfbook,
+WSTP, and BTL currently in use. If the local server is stopped, notebooks still
+open and can be edited, but cells cannot be evaluated locally and MCP access is
+unavailable.
 
 ## This is not the main Wolfbook
 

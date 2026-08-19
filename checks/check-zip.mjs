@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readZip } from '../viewer/zip.js';
+import { readZip } from '../extension/viewer/zip.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const work = mkdtempSync(join(tmpdir(), 'wbzip-'));

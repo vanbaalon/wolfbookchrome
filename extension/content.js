@@ -22,6 +22,14 @@
   let lastMountError = null;    // surfaced by the diagnostics
   let suppressTeardownUntil = 0;
   let currentAttachedId = null;   // module-scope mirror, so teardown can detach
+  // One content script survives every Overleaf file-tab switch. The Chrome
+  // message listener is therefore installed once, but it must dispatch into
+  // the CURRENT mount. Keeping the handler and attachment id inside mount()
+  // left that one listener permanently bound to the first .wb opened in the
+  // tab: later notebooks advertised correctly, then every MCP request was
+  // rejected as belonging to the wrong attachment.
+  let currentAgentRpcHandler = null;
+  let currentAgentReattach = null;
   let mountEpoch = 0;             // cancels async work from an older selected tab
   let lastDocFile = null;         // synchronise Overleaf's async text-buffer handoff
   let lastDocSource = null;
@@ -632,6 +640,8 @@
   // ── panel ─────────────────────────────────────────────────────────────────
   function teardown() {
     mountEpoch++;
+    currentAgentRpcHandler = null;
+    currentAgentReattach = null;
     if (currentAttachedId) {
       mcp({ cmd: 'serve-detach', notebookId: currentAttachedId });
       currentAttachedId = null;
@@ -915,7 +925,9 @@
                  autocomplete="off" spellcheck="false">
           <button data-act="token-ok">Connect</button>
           <button data-act="token-cancel" title="Evaluate over MCP instead">Not now</button>
-          <span class="wb-token-hint">get it with <code>node server/cli.mjs token</code></span>`;
+          <span class="wb-token-hint">In Terminal, open
+            <code>VSCodeWolframExtension/WolfbookChromeExtension</code>, then run
+            <code>node server/cli.mjs token</code></span>`;
         bar.querySelector('.wb-token-msg').textContent = reason;
         body.parentNode.insertBefore(bar, body);
 
@@ -1702,8 +1714,6 @@
     // model the person is editing — reading a stale snapshot would be worse than
     // useless — and every change is left UNSAVED. Saving to Overleaf remains the
     // person's own action, through the Save button.
-    let attachedId = null;
-
     const agentBadge = (indices) => {
       for (const i of indices) {
         const cell = nbRoot().querySelectorAll('.wb-cell')[i];
@@ -1713,6 +1723,11 @@
 
     async function handleAgentRpc(req) {
       const { method, params = {} } = req;
+
+      // Used by the popup's end-to-end status check. This proves not merely
+      // that wolfbook-serve remembers a notebook, but that its reverse RPC can
+      // reach the live content script which owns the visible editor.
+      if (method === 'ping') return { path: fileName, projectId };
 
       if (method === 'getContext') {
         // Flush open editors first, so an agent sees what the person sees.
@@ -1804,6 +1819,9 @@
     // Guarded: agent access is an optional capability, and a context without
     // chrome.runtime.onMessage (or an older browser) must still get a working
     // notebook rather than a panel that fails to mount.
+    currentAgentRpcHandler = handleAgentRpc;
+    currentAgentReattach = () => attachToCoalition();
+
     if (!window.__wbRpcListener && chrome.runtime?.onMessage?.addListener) {
       window.__wbRpcListener = true;
       chrome.runtime.onMessage.addListener((m, _s, reply) => {
@@ -1812,14 +1830,18 @@
           // The server came back (restarted, or started after this tab). Say we
           // are here again — attach is keyed on (project, file), so this is a
           // no-op when nothing was lost.
-          attachedId = null;
           currentAttachedId = null;
-          attachToCoalition().catch((e) => log('coalition reattach failed', e));
+          const reattach = currentAgentReattach;
+          if (reattach) reattach().catch((e) => log('coalition reattach failed', e));
           reply({ handled: true });
           return true;
         }
-        if (!attachedId || m.req?.notebookId !== attachedId) { reply({ handled: false }); return true; }
-        handleAgentRpc(m.req)
+        const handler = currentAgentRpcHandler;
+        if (!handler || !currentAttachedId || m.req?.notebookId !== currentAttachedId) {
+          reply({ handled: false });
+          return true;
+        }
+        handler(m.req)
           .then((result) => reply({ handled: true, result }))
           .catch((e) => reply({ handled: true, error: String(e?.message || e) }));
         return true;                 // async reply
@@ -1865,20 +1887,20 @@
             fileName,
           },
         });
+        // A tab switch can finish while the background request is in flight.
+        // Never let that late response overwrite the new mount's route.
+        if (!isCurrentMount()) return null;
         if (!(res && res.ok && res.result)) {
-          attachedId = null;
           currentAttachedId = null;
           host.dataset.wbMcpAttached = 'false';
           throw new Error(res?.error || 'wolfbook-serve did not accept the notebook attachment');
         }
         if (res.result.routeBound === false) {
-          attachedId = null;
           currentAttachedId = null;
           host.dataset.wbMcpAttached = 'false';
           throw new Error('the notebook registered, but Chrome did not bind it to this tab');
         }
-        attachedId = res.result.notebookId;
-        currentAttachedId = attachedId;
+        currentAttachedId = res.result.notebookId;
         host.dataset.wbMcpAttached = 'true';
         log('attached to the coalition as', res.result.path);
         return res.result;

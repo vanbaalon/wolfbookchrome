@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
+const extensionRoot = path.join(root, 'extension');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!fs.existsSync(CHROME)) { console.log('SKIP — Chrome not found'); process.exit(0); }
 
@@ -126,7 +127,8 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(PAGE); return; }
-  const file = path.join(root, url);
+  const extensionFile = path.join(extensionRoot, url);
+  const file = fs.existsSync(extensionFile) ? extensionFile : path.join(root, url);
   if (file.startsWith(root) && fs.existsSync(file) && !fs.statSync(file).isDirectory()) {
     res.writeHead(200, { 'Content-Type': 'text/javascript' });
     fs.createReadStream(file).pipe(res); return;

@@ -11,26 +11,20 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const extensionVersion = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')).version;
+const extensionRoot = path.join(root, 'extension');
+const extensionVersion = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8')).version;
 const chromeBin = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 if (!fs.existsSync(chromeBin)) { console.log('SKIP — Chrome not found'); process.exit(0); }
 
-const popup = fs.readFileSync(path.join(root, 'viewer', 'popup.html'), 'utf8');
-const page = (online) => popup.replace(
+const popup = fs.readFileSync(path.join(extensionRoot, 'viewer', 'popup.html'), 'utf8');
+const page = (response) => popup.replace(
   '<script type="module" src="popup.js"></script>',
   `<script>
   window.chrome = {
     runtime: {
       getManifest: () => ({ version: ${JSON.stringify(extensionVersion)} }), lastError: null,
       getURL: p => '/' + p,
-      sendMessage: (msg, cb) => cb(${online ? JSON.stringify({
-        ok: true, connected: true, running: true, port: 27300, authorised: true,
-        health: { serverVersion: '0.3.0', versions: {
-          wolfbook: '2.9.0', wolfbookBuildDate: '2026-08-19',
-          wstp: '1.1.26', wstpBuildDate: '2026-08-18',
-          btl: '2.2.33', btlBuildDate: '2026-08-17',
-        } },
-      }) : JSON.stringify({ ok: true, connected: false, running: false })}),
+      sendMessage: (msg, cb) => cb(${JSON.stringify(response)}),
     },
     tabs: { create() {}, query(_q, cb) { cb([]); }, update() {} },
     windows: { update() {} },
@@ -43,12 +37,14 @@ const page = (online) => popup.replace(
       .map(el => [el.dataset.version, el.textContent.trim()]));
     await fetch('/result', { method: 'POST', body: JSON.stringify({
       text: document.querySelector('.status').textContent.trim(),
-      help: document.querySelector('.help').classList.contains('visible'), rows,
+      mcpText: document.querySelector('.mcp-status').textContent.trim(),
+      help: document.querySelector('.server-help').classList.contains('visible'),
+      mcpHelp: document.querySelector('.mcp-help').classList.contains('visible'), rows,
     }) });
   </script>`
 );
 
-async function run(online) {
+async function run(response) {
   let finish;
   const result = new Promise(r => { finish = r; });
   const server = http.createServer((req, res) => {
@@ -60,9 +56,9 @@ async function run(online) {
     }
     const url = req.url === '/' ? '/viewer/popup.html' : req.url;
     if (url === '/viewer/popup.html') {
-      res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(page(online)); return;
+      res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(page(response)); return;
     }
-    const file = path.join(root, url);
+    const file = path.join(extensionRoot, url);
     if (file.startsWith(root) && fs.existsSync(file)) {
       res.writeHead(200, { 'Content-Type': url.endsWith('.js') ? 'text/javascript' : 'application/octet-stream' });
       fs.createReadStream(file).pipe(res); return;
@@ -85,16 +81,35 @@ const check = (label, ok, extra = '') => {
   if (!ok) failures++;
 };
 
-const online = await run(true);
+const onlineResponse = {
+  ok: true, connected: true, running: true, port: 27300, authorised: true,
+  notebooks: [{ fileName: 'testwb.wb', reachable: true, activeFile: 'testwb.wb' }],
+  health: { serverVersion: '0.3.1', versions: {
+    wolfbook: '2.9.0', wolfbookBuildDate: '2026-08-19',
+    wstp: '1.1.26', wstpBuildDate: '2026-08-18',
+    btl: '2.2.33', btlBuildDate: '2026-08-17',
+  } },
+};
+const online = await run(onlineResponse);
 check('running server is shown as running', /Local server running/.test(online?.text || ''), online?.text);
 check('running server shows its port', /27300/.test(online?.text || ''), online?.text);
 check('running server hides startup help', online?.help === false);
+check('MCP green means a real notebook route answered',
+  /MCP connected/.test(online?.mcpText || '') && /testwb\.wb/.test(online?.mcpText || ''),
+  online?.mcpText);
 check('popup exposes server, Wolfbook, WSTP and BTL versions',
-  online?.rows?.server === 'v0.3.0' && online?.rows?.wolfbook.startsWith('v2.9.0')
+  online?.rows?.server === 'v0.3.1' && online?.rows?.wolfbook.startsWith('v2.9.0')
   && online?.rows?.wstp.startsWith('v1.1.26') && online?.rows?.btl.startsWith('v2.2.33'),
   JSON.stringify(online?.rows));
 
-const offline = await run(false);
+const disconnected = await run({ ...onlineResponse,
+  notebooks: [{ fileName: 'testwb.wb', reachable: false, error: 'no Overleaf tab is open' }],
+});
+check('a registered but unreachable tab is clearly red',
+  /MCP disconnected/.test(disconnected?.mcpText || '') && disconnected?.mcpHelp === true,
+  disconnected?.mcpText);
+
+const offline = await run({ ok: true, connected: false, running: false });
 check('stopped server is shown as not running', /not running/.test(offline?.text || ''), offline?.text);
 check('stopped server shows actionable startup help', offline?.help === true);
 check('Chrome-extension version remains visible offline', offline?.rows?.chrome === `v${extensionVersion}`);

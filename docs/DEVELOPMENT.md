@@ -88,7 +88,7 @@ editing only changes what gets evaluated.
   would be needed regardless), and it is not built for hundreds of instances.
 
 `editor/` holds the source; `./editor/build.sh` regenerates
-`vendor/codemirror.bundle.js`. **The bundle is committed**, so loading the
+`extension/vendor/codemirror.bundle.js`. **The bundle is committed**, so loading the
 extension still needs no npm and no build step — only changing the editor does.
 The Wolfram mode is a CM6 `StreamLanguage` sharing the same builtin list as the
 read-only highlighter, so a cell does not change colour when it becomes editable.
@@ -150,7 +150,7 @@ path (the server always returns rich HTML, so both are hidden when it is in use)
 
 ## Standalone: a `.wb` outside Overleaf
 
-`viewer/standalone.html` is an extension PAGE — not a content script — because
+`extension/viewer/standalone.html` is an extension PAGE — not a content script — because
 Chrome never renders a `.wb` at all. An unknown type on `file://` is
 **downloaded, not displayed**, so there is no document for a script to attach
 to; the only way to show the notebook is a page of our own, told where the file
@@ -281,8 +281,9 @@ undo for *text* edits beyond CodeMirror's own per-cell history.
 ./sync-assets.sh          # vendor the extension's own KaTeX + renderer CSS
 ```
 
-Then Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → this
-folder. Open an Overleaf project containing a `.wb` and click it.
+Then Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → the
+repository's `extension/` folder. Open an Overleaf project containing a `.wb`
+and click it.
 
 Upload the notebook's `img/<notebook-name>/` folder to the project too, or plots
 will render as "not in this Overleaf project" placeholders.
@@ -294,11 +295,11 @@ pre-rendered KaTeX. So the viewer does not re-typeset anything; it re-hosts that
 markup and styles it with **the extension's own stylesheets**, copied verbatim by
 `sync-assets.sh`:
 
-- `vendor/katex-css.js` — KaTeX CSS with every woff2 font inlined as a data URI
+- `extension/vendor/katex-css.js` — KaTeX CSS with every woff2 font inlined as a data URI
   (no CDN, works offline, no layout jump).
-- `vendor/renderer-css.js` — `WL_CSS`, which styles wolfbook's custom elements
+- `extension/vendor/renderer-css.js` — `WL_CSS`, which styles wolfbook's custom elements
   (`wrow`, `wfrac`, `wsub`, …).
-- `vendor/katex.mjs` — used **only** for `$…$` in markdown cells, which is
+- `extension/vendor/katex.mjs` — used **only** for `$…$` in markdown cells, which is
   source text rather than pre-rendered output.
 
 Maintaining a hand-written stylesheet instead would mean a second copy that
@@ -306,7 +307,7 @@ drifts. Re-run `sync-assets.sh` after upgrading the extension.
 
 ### Highlighting
 
-`viewer/wl-highlight.js` is a single-pass Wolfram tokenizer (linear, no
+`extension/viewer/wl-highlight.js` is a single-pass Wolfram tokenizer (linear, no
 backtracking, ~20 ms for 70 k characters). It exists because the two
 alternatives are both wrong for this job:
 
@@ -319,7 +320,7 @@ alternatives are both wrong for this job:
 
 The part of that grammar carrying the visual weight is its **builtin-symbol
 list**, and that is plain data. `extract-builtins.mjs` pulls 4175 `System\``
-names out of `wolfram.tmLanguage.json` into `vendor/wl-builtins.js`, so builtins
+names out of `wolfram.tmLanguage.json` into `extension/vendor/wl-builtins.js`, so builtins
 are identified from the same source VS Code uses. Re-run it, like
 `sync-assets.sh`, after upgrading the extension:
 
@@ -339,7 +340,7 @@ Not cosmetic — two concrete failures it prevents:
 - Overleaf's stylesheet would otherwise reach into KaTeX markup, where one
   inherited `line-height` visibly breaks equations.
 
-Two consequences worth knowing before editing `viewer/`:
+Two consequences worth knowing before editing `extension/viewer/`:
 
 - **`@font-face` is split out to the document head.** Chrome ignores
   `@font-face` declared inside a shadow root, but fonts registered on the
@@ -384,7 +385,7 @@ __wolfbookDiagnose('full')     …plus a DOM outline of the relevant regions
 __wolfbookDiagnose('download') save the whole report to a .txt file
 ```
 
-These work in the console's **default `top` context** — `page-bridge.js` exposes
+These work in the console's **default `top` context** — `extension/page-bridge.js` exposes
 them on the page's own window, because a content script's globals live in an
 isolated world that would otherwise require switching the context dropdown. The
 latest report is also kept in `chrome.storage.local` under `lastDiagnosis`.
@@ -404,22 +405,22 @@ obvious in the picture.
 file you name, never the modules it imports. A stray backtick in a CSS comment
 inside a template literal in `theme-css.js` broke the entire viewer in the
 browser while every Node-side suite stayed green, because no unit test imported
-that module. `check-parse.mjs` imports all of them, `vendor/` included.
+that module. `check-parse.mjs` imports all of them, `extension/vendor/` included.
 
 ## Two things the offline checks cannot prove
 
 1. **That the extension loads.** Chrome disabled `--load-extension` in M137
    (verified here on Chrome 151: a test extension never appears as a target), so
-   `check-extension.mjs` runs the real `content.js` as a page script behind a
+   `check-extension.mjs` runs the real `extension/content.js` as a page script behind a
    small `chrome` shim. The manifest, the isolated world, and dynamic `import()`
    of a web-accessible resource from a content script are therefore unverified.
    That last one is the standard MV3 pattern and is expected to work; if it does
    not, the panel shows an explicit error instead of staying blank.
 2. **That Overleaf's DOM matches the probes.** The fixture page is built from
-   the same selectors `content.js` looks for, so it validates our code and never
+   the same selectors `extension/content.js` looks for, so it validates our code and never
    our guess about Overleaf's markup.
 
-When Overleaf drifts, the entire fix is two functions in `content.js`:
+When Overleaf drifts, the entire fix is two functions in `extension/content.js`:
 `probeSelectedFile()` and `probeEditorPane()`. Nothing else — not the zip
 endpoint, the `.wb` format, or the MCP contract — depends on Overleaf's markup.
 

@@ -55,7 +55,8 @@ if [ "$UNINSTALL" = 1 ]; then
   exit 0
 fi
 
-EXT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+EXT_DIR="$REPO_DIR/extension"
 
 # ── which extension? ────────────────────────────────────────────────────────
 #

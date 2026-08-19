@@ -214,7 +214,7 @@ async function serveStatus() {
   const port = await findServePort(true);
   if (!port) return { ok: true, connected: false, running: false, health: null };
   const token = await getServeToken();
-  let authorised = false, info = null;
+  let authorised = false, info = null, notebooks = null;
   if (token) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/info`, {
@@ -223,10 +223,18 @@ async function serveStatus() {
       authorised = res.ok;
       if (res.ok) info = await res.json();
     } catch (_) {}
+    if (authorised) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/v1/notebooks/status`, {
+          headers: { 'X-Wolfbook-Token': token }, signal: AbortSignal.timeout(3500),
+        });
+        if (res.ok) notebooks = (await res.json()).notebooks || [];
+      } catch (_) {}
+    }
   }
   return {
     ok: true, connected: true, running: true, port, authorised,
-    hasToken: !!token, health: serveHealth, info,
+    hasToken: !!token, health: serveHealth, info, notebooks,
   };
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { escapeInvalidJsonBackslashes, parseNotebookJson } from '../viewer/notebook-json.js';
+import { escapeInvalidJsonBackslashes, parseNotebookJson } from '../extension/viewer/notebook-json.js';
 
 const legacy = String.raw`{"cells":[{"kind":2,"value":"A = \[Alpha] + \[CurlyTheta]"}]}`;
 assert.throws(() => JSON.parse(legacy));
