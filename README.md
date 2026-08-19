@@ -60,6 +60,11 @@ The only outbound traffic is to `overleaf.com`, the site you already have open.
 That is all that is needed for viewing. There is no build step: everything the
 browser needs is committed.
 
+The toolbar popup reports whether the local server is running and shows the
+versions of `wolfbook-serve`, Wolfbook, WSTP and BTL that are actually in use.
+If the server is stopped, the same popup gives the exact start and enable-at-login
+commands; notebooks remain available read-only.
+
 > Upload the notebook's `img/<notebook-name>/` folder to your Overleaf project
 > as well, or plots will show as “not in this Overleaf project” placeholders —
 > Overleaf has no way to know those files belong to the notebook.

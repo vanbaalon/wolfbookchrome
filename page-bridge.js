@@ -127,6 +127,26 @@
     }
   }
 
+  /** The CodeMirror belonging to the visible tab, never a retained old tab. */
+  function activeEditorView() {
+    const candidates = [...document.querySelectorAll('.cm-content')]
+      .filter((el) => el.cmView?.view);
+    const visible = candidates.filter((el) => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        if (n.hidden || n.getAttribute?.('aria-hidden') === 'true') return false;
+        const s = getComputedStyle(n);
+        if (s.display === 'none' || s.visibility === 'hidden') return false;
+      }
+      const r = (el.closest('.cm-editor') || el).getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    // During a React handoff both nodes can exist briefly; the newly mounted
+    // editor is last in DOM order. With several invisible retained editors,
+    // refusing is safer than writing into the first one.
+    const content = visible.at(-1) || (candidates.length === 1 ? candidates[0] : null);
+    return content?.cmView?.view || null;
+  }
+
   /**
    * Replace the whole CodeMirror document.
    *
@@ -137,8 +157,7 @@
    * the re-selection dance the binary path needs.
    */
   function setEditorDoc(text, expect) {
-    const content = document.querySelector('.cm-content');
-    const view = content && content.cmView && content.cmView.view;
+    const view = activeEditorView();
     if (!view) return { ok: false, error: 'no CodeMirror editor is open' };
 
     // REFUSE UNLESS THE DOCUMENT IS THE ONE WE READ.
@@ -168,8 +187,7 @@
   }
 
   function getEditorDoc() {
-    const content = document.querySelector('.cm-content');
-    const view = content && content.cmView && content.cmView.view;
+    const view = activeEditorView();
     if (!view) return null;
     try { return view.state.doc.toString(); } catch (_) { return null; }
   }

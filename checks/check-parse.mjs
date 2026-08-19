@@ -79,6 +79,24 @@ for (const rel of SCRIPTS) {
   }
 }
 
+// Reverse MCP routing must find the same Overleaf URL variants that receive
+// the content script. A bare overleaf.com tab used to attach successfully but
+// then disappear when the background worker tried to route an agent call.
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+const backgroundSource = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
+for (const pattern of manifest.content_scripts?.[0]?.matches || []) {
+  if (backgroundSource.includes(`'${pattern}'`) || backgroundSource.includes(`"${pattern}"`)) {
+    ok(`background routes ${pattern}`);
+  } else {
+    bad(`background routes ${pattern}`, 'missing from queryOverleafTabs');
+  }
+}
+if (/chrome\.tabs\.query\(\{\}\)/.test(backgroundSource)) {
+  ok('background has an unfiltered tab-query fallback');
+} else {
+  bad('background has an unfiltered tab-query fallback');
+}
+
 // No stray control characters in shipped source.
 //
 // A literal NUL byte once landed in an option value where a space was meant.

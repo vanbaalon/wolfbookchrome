@@ -1,3 +1,5 @@
+import { parseNotebookJson } from './notebook-json.js';
+
 // viewer/standalone.js — the Wolfbook viewer for a .wb that is NOT in Overleaf.
 //
 // WHY THIS PAGE EXISTS
@@ -254,7 +256,7 @@ async function render() {
 async function openText(text, name, baseUrl) {
   let parsed;
   try {
-    parsed = JSON.parse(text);
+    parsed = parseNotebookJson(text);
   } catch (e) {
     showError(`${name} is not valid notebook JSON: ${e.message}`);
     return;

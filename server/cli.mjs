@@ -60,6 +60,10 @@ async function cmdStatus() {
   const st = readState();
   console.log('wolfbook-serve: running');
   console.log(`  url      http://127.0.0.1:${found.port}`);
+  console.log(`  server   ${found.health.serverVersion || 'unknown'}`);
+  console.log(`  wolfbook ${found.health.versions?.wolfbook || 'unknown'}`);
+  console.log(`  wstp     ${found.health.versions?.wstp || 'unknown'}`);
+  console.log(`  btl      ${found.health.versions?.btl || 'unknown'}`);
   console.log(`  wolfram  ${found.health.wolframVersion || 'unknown'}`);
   console.log(`  pid      ${alive(st.pid) ? st.pid : '(not started by this CLI)'}`);
   console.log(`  token    ${st.token ? st.token.slice(0, 6) + '…  (run `token` to print)' : '(none)'}`);

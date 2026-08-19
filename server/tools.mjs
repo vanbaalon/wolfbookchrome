@@ -27,6 +27,13 @@ const UNSAVED = 'This change is in the browser only. '
   + 'It reaches the Overleaf project when the person presses Save in the tab.';
 const changed = (summary) => text(`${summary}\n${UNSAVED}`);
 
+/** Canonical MCP cell numbers are 1-based; the browser RPC is 0-based. */
+function numberedIndex(args) {
+  if (args.cellIndex != null) return Number(args.cellIndex); // legacy/private
+  if (args.cellNumber != null) return Number(args.cellNumber) - 1;
+  return NaN;
+}
+
 /** A compact, agent-readable view of a notebook. */
 function describeNotebook(nb, model) {
   const lines = [`Notebook: ${nb.path}`,
@@ -95,7 +102,7 @@ export function makeToolSurface({ registry, kernel, coalition }) {
     async wolfbook_getCellOutput(args) {
       const nb = nbFor(args);
       const model = await registry.call(nb, 'getContext');
-      const i = Number(args.cellIndex ?? args.cellNumber);
+      const i = numberedIndex(args);
       const cell = model.cells[i];
       if (!cell) return fail(`No cell ${i}; the notebook has ${model.cells.length}.`);
       const items = (cell.outputs || []).flatMap((o) => o.items || []);
@@ -116,8 +123,19 @@ export function makeToolSurface({ registry, kernel, coalition }) {
 
     async wolfbook_runCell(args) {
       const nb = nbFor(args);
-      const i = Number(args.cellIndex ?? args.cellNumber ?? args.cellId);
-      if (!Number.isInteger(i)) return fail('Required: cellIndex (0-based)');
+      // The consolidated schema carries ranges on wolfbook_runCell. Keep the
+      // old plural tool below as a compatibility alias for direct clients.
+      if (args.startCell != null || args.endCell != null) {
+        const start = args.startCell == null ? 0 : Number(args.startCell) - 1;
+        const end = args.endCell == null ? null : Number(args.endCell) - 1;
+        if (!Number.isInteger(start) || start < 0 || (end != null && (!Number.isInteger(end) || end < start))) {
+          return fail('startCell/endCell must be a valid 1-based inclusive range');
+        }
+        const res = await registry.call(nb, 'runCells', { start, end });
+        return text(res?.text || res?.summary || 'ran');
+      }
+      const i = numberedIndex(args);
+      if (!Number.isInteger(i) || i < 0) return fail('Required: cellNumber (1-based)');
       // Routed through the TAB, not evaluated here, so the person watching sees
       // the result appear in their own notebook rather than nothing at all.
       const res = await registry.call(nb, 'runCell', { index: i });
@@ -127,8 +145,8 @@ export function makeToolSurface({ registry, kernel, coalition }) {
     async wolfbook_runCells(args) {
       const nb = nbFor(args);
       const res = await registry.call(nb, 'runCells', {
-        start: Number(args.startCell ?? 0),
-        end: args.endCell == null ? null : Number(args.endCell),
+        start: args.startCell == null ? 0 : Number(args.startCell) - 1,
+        end: args.endCell == null ? null : Number(args.endCell) - 1,
       });
       return text(res?.summary || 'ran');
     },
@@ -136,8 +154,8 @@ export function makeToolSurface({ registry, kernel, coalition }) {
     // ── editing ────────────────────────────────────────────────────────
     async wolfbook_editCell(args) {
       const nb = nbFor(args);
-      const i = Number(args.cellIndex ?? args.cellNumber);
-      if (!Number.isInteger(i)) return fail('Required: cellIndex (0-based)');
+      const i = numberedIndex(args);
+      if (!Number.isInteger(i) || i < 0) return fail('Required: cellNumber (1-based)');
       if (typeof args.content !== 'string' && typeof args.value !== 'string') {
         return fail('Required: content');
       }
@@ -150,30 +168,46 @@ export function makeToolSurface({ registry, kernel, coalition }) {
     async wolfbook_insertCells(args) {
       const nb = nbFor(args);
       const cells = args.cells || [{ kind: args.kind || 'code', value: args.content ?? args.value ?? '' }];
+      let index = args.index == null ? null : Number(args.index); // legacy/private
+      if (index == null && args.afterCell != null) {
+        const anchor = Number(args.afterCell) - 1;
+        if (!Number.isInteger(anchor) || anchor < 0) return fail('afterCell must be 1-based');
+        index = args.position === 'before' ? anchor : anchor + 1;
+      }
       const res = await registry.call(nb, 'insertCells', {
-        index: args.index == null ? null : Number(args.index),
+        index,
         cells: cells.map((c) => ({
           kind: String(c.kind).startsWith('mark') ? 1 : 2,
           value: String(c.value ?? c.content ?? ''),
         })),
       });
-      return changed(res?.summary || 'inserted');
+      let summary = res?.summary || 'inserted';
+      // Match the consolidated MCP contract: inserted code runs by default and
+      // its output appears in the same browser notebook the person is viewing.
+      if (args.evaluate !== false && cells.some((c) => !String(c.kind).startsWith('mark'))) {
+        const model = await registry.call(nb, 'getContext');
+        const at = index == null ? Math.max(0, model.cells.length - cells.length) : index;
+        const ran = await registry.call(nb, 'runCells', { start: at, end: at + cells.length - 1 });
+        summary += `; ${ran?.summary || 'evaluated inserted code'}`;
+      }
+      return changed(summary);
     },
 
     async wolfbook_deleteCell(args) {
       const nb = nbFor(args);
-      const i = Number(args.cellIndex ?? args.cellNumber);
-      if (!Number.isInteger(i)) return fail('Required: cellIndex (0-based)');
+      const i = numberedIndex(args);
+      if (!Number.isInteger(i) || i < 0) return fail('Required: cellNumber (1-based)');
       const res = await registry.call(nb, 'deleteCell', { index: i });
       return changed(res?.summary || `deleted cell ${i}` );
     },
 
     async wolfbook_moveCell(args) {
       const nb = nbFor(args);
-      const from = Number(args.fromIndex ?? args.cellIndex);
-      const to = Number(args.toIndex);
+      const from = args.fromIndex != null ? Number(args.fromIndex) : numberedIndex(args);
+      const to = args.toIndex != null ? Number(args.toIndex)
+        : (args.toPosition != null ? Math.max(0, Number(args.toPosition) - 1) : NaN);
       if (!Number.isInteger(from) || !Number.isInteger(to)) {
-        return fail('Required: fromIndex and toIndex (0-based)');
+        return fail('Required: cellNumber and toPosition (both 1-based)');
       }
       const res = await registry.call(nb, 'moveCell', { from, to });
       return changed(res?.summary || `moved cell ${from} → ${to}`);

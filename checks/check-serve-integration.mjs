@@ -63,7 +63,20 @@ const SERVE_URL = ${JSON.stringify(wb.url)};
 const SERVE_TOKEN = ${JSON.stringify(wb.token)};
 const SERVE_PORT = ${wb.port};
 window.__prompted = 0;
+window.__attachCount = 0;
+window.__WB_ATTACH_HEARTBEAT_MS = 500;
 window.prompt = () => { window.__prompted++; return SERVE_TOKEN; };
+let rpcResponse = null;
+async function ensureRpcStream() {
+  if (rpcResponse) return rpcResponse;
+  rpcResponse = await fetch(SERVE_URL + '/v1/events?token=' + encodeURIComponent(SERVE_TOKEN));
+  // Consume the stream so the connection remains live for reverse RPC.
+  (async () => {
+    const reader = rpcResponse.body.getReader();
+    try { while (!(await reader.read()).done) {} } catch (_) {}
+  })();
+  return rpcResponse;
+}
 window.chrome = {
   storage: { local: {
     _v: {},   // deliberately empty: exercise the "ask on first evaluate" path
@@ -105,6 +118,20 @@ window.chrome = {
             if (!r.ok) return cb({ ok: false, error: 'HTTP ' + r.status });
             return cb({ ok: true, result: await r.json() });
           }
+          if (msg.cmd === 'serve-attach') {
+            const stored = window.chrome.storage.local._v.wbServeToken;
+            if (!stored) return cb({ ok: false, error: 'no token' });
+            await ensureRpcStream();
+            const r = await fetch(SERVE_URL + '/v1/notebooks/attach', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Wolfbook-Token': stored },
+              body: JSON.stringify(msg.notebook || {}),
+            });
+            const body = await r.json();
+            window.__attachCount++;
+            return cb({ ok: r.ok, result: r.ok ? body : null, error: r.ok ? null : body.error });
+          }
+          if (msg.cmd === 'serve-detach') return cb({ ok: true });
           if (msg.cmd === 'mcp-status') return cb({ ok: true, connected: false });
           cb({ ok: false, error: 'unhandled ' + msg.cmd });
         } catch (e) { cb({ ok: false, error: String(e.message || e) }); }
@@ -157,6 +184,23 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       await wait(800);
       say('the bar closes once the token is accepted', !shadow.querySelector('.wb-token-bar'));
     }
+    const attachedDeadline = Date.now() + 5000;
+    let advertised = [];
+    while (Date.now() < attachedDeadline) {
+      const r = await fetch(SERVE_URL + '/v1/notebooks', {
+        headers: { 'X-Wolfbook-Token': SERVE_TOKEN },
+      });
+      advertised = (await r.json()).notebooks || [];
+      if (advertised.some(p => /sample\.wb$/.test(p))) break;
+      await wait(100);
+    }
+    say('the open Overleaf notebook is advertised to MCP',
+        advertised.some(p => /sample\.wb$/.test(p)), JSON.stringify(advertised));
+    const attachedOnce = window.__attachCount;
+    await wait(1200);
+    say('attachment is renewed even while its previous id exists',
+        window.__attachCount > attachedOnce,
+        attachedOnce + ' → ' + window.__attachCount + ' attach call(s)');
     await running;
     // The first click was refused for want of a token; run it again now.
     await plotCell.__wbRun();

@@ -46,6 +46,19 @@ if (!fs.existsSync(zipFixture)) {
   console.error('missing fixtures/sample-project.zip — run: node fixtures/make-fixture.mjs');
   process.exit(1);
 }
+const legacyNotebook = fs.readFileSync(path.join(root, 'fixtures', 'sample.wb'), 'utf8')
+  // Reproduce the real Overleaf test.wb: old writers emitted a Wolfram named
+  // character with one JSON-illegal backslash inside a code-cell string.
+  .replace(
+    'Plot[Tan[x], {x, 0, 3}]',
+    String.raw`\[Alpha] + Plot[Tan[x], {x, 0, 3}]`,
+  );
+try {
+  JSON.parse(legacyNotebook);
+  throw new Error('legacy fixture unexpectedly remained valid JSON');
+} catch (e) {
+  if (/unexpectedly remained/.test(e.message)) throw e;
+}
 
 // ── fake Overleaf ───────────────────────────────────────────────────────────
 // Only the hooks content.js probes for: a file tree with a selected .wb, and an
@@ -65,12 +78,26 @@ const PAGE = `<!doctype html>
        as a binary file, so there is no CodeMirror editor at all — just this
        file-view, whose Download link names the file and points at its bytes. -->
   <div style="flex:1;display:flex;flex-direction:column">
-    <div role="tablist" style="display:flex;border-bottom:1px solid #ccc">
-      <div role="tab" aria-selected="false">main.tex</div>
-      <div role="tab" aria-selected="true">sample.wb<button>×</button></div>
-    </div>
-    <div id="panel-source-editor" style="flex:1;position:relative">
-      <div class="file-view" style="height:100%">
+    <!-- In Overleaf's binary-file layout the tab strip can live INSIDE the
+         pane that contains .file-view. The Wolfbook host must begin below it,
+         exactly as it does for a doc-backed .wb. -->
+    <div id="panel-source-editor" style="flex:1;position:relative;display:flex;flex-direction:column">
+      <div role="tablist" class="editor-file-tabs" style="display:flex;border-bottom:1px solid #ccc;height:32px;flex:0 0 32px">
+        <div role="tab" aria-selected="false">main.tex</div>
+        <div role="tab" aria-selected="true">sample.wb<button>×</button></div>
+      </div>
+      <!-- Overleaf can retain the previous tab's view in the DOM while the
+           active tab has already changed. The tab must win over this stale
+           download link or the panel opens the wrong notebook. -->
+      <div class="file-view" hidden>
+        <a href="/project/${PROJECT_ID}/blob/stale" download="wrong.wb">Download</a>
+      </div>
+      <!-- The real SPA retains test.wb's valid CodeMirror document underneath
+           this binary view. It must never outrank sample.wb's named blob. -->
+      <div class="cm-editor" style="position:absolute;inset:33px 0 0;z-index:0">
+        <div class="cm-content"></div>
+      </div>
+      <div class="file-view" style="flex:1;position:relative;z-index:1;background:white">
         <div class="file-view-buttons">
           <a tabindex="0" href="/project/${PROJECT_ID}/blob/e2bb58c8a95736b383ff1dd65cc1a88f"
              download="sample.wb" data-ol-loading="false" class="d-inline-grid btn btn-secondary">
@@ -100,7 +127,14 @@ window.chrome = {
     sendMessage: (msg, cb) => { if (typeof cb === 'function') cb({ ok: true, connected: false }); },
   },
 };
+const staleEditorSource = JSON.stringify({
+  cells: [{ kind: 1, value: '# WRONG retained text notebook', languageId: 'markdown', outputs: [], metadata: {} }],
+});
+document.querySelector('.cm-content').cmView = {
+  view: { state: { doc: { toString: () => staleEditorSource, get length() { return staleEditorSource.length; } } } },
+};
 </script>
+<script src="/page-bridge.js"></script>
 <script src="/content.js"></script>
 
 <script>
@@ -144,11 +178,19 @@ const deadline = Date.now() + 40000;
     const openBtn = shadow.querySelector('[data-act="open"]');
     say('Open in Wolfbook disabled with no local server', !!(openBtn && openBtn.disabled));
 
+    const tabs = document.querySelector('[role="tablist"]').getBoundingClientRect();
+    const hostBox = host.getBoundingClientRect();
+    say('binary-file viewer preserves Overleaf tabs', hostBox.top >= tabs.bottom - 1,
+        'host top ' + Math.round(hostBox.top) + ' vs tabs bottom ' + Math.round(tabs.bottom));
+
     // The notebook must come from the Download link's blob URL, not the zip;
     // the zip is only for the images this fixture references.
     const counts = await (await fetch('/__counts')).json();
     say('notebook fetched from the blob endpoint', counts.blobRequests >= 1,
         'blob=' + counts.blobRequests + ' zip=' + counts.zipRequests);
+    say('a retained valid text editor cannot override the named binary blob',
+        !/WRONG retained text notebook/.test(nb?.textContent || ''),
+        note && note.textContent);
 
     // Switching to Source must show the raw JSON.
     const srcBtn = [...shadow.querySelectorAll('button[data-mode]')]
@@ -169,9 +211,10 @@ const deadline = Date.now() + 40000;
       t.setAttribute('aria-selected', t.textContent.startsWith('main.tex')));
   document.querySelectorAll('[role="treeitem"]').forEach(li =>
       li.setAttribute('aria-selected', li.querySelector('.entity-name').textContent === 'main.tex'));
-  const fileView = document.querySelector('.file-view');
+  const fileView = [...document.querySelectorAll('.file-view')].find(v => !v.hidden);
+  let ed = null;
   if (fileView) {
-    const ed = document.createElement('div');
+    ed = document.createElement('div');
     ed.className = 'cm-editor';
     ed.style.height = '100%';
     ed.textContent = '\\\\documentclass{article}';
@@ -180,6 +223,19 @@ const deadline = Date.now() + 40000;
   await new Promise(r => setTimeout(r, 1200));
   say('panel removed when a non-.wb file is selected',
       !document.getElementById('wolfbook-overleaf-host'));
+
+  // Return to the binary notebook in the order the live SPA uses: the binary
+  // pane appears first, while the old text tab may still carry its active
+  // marker for a moment. The visible Download view must win that race.
+  if (ed && fileView) ed.replaceWith(fileView);
+  document.querySelectorAll('[role="treeitem"]').forEach(li =>
+      li.setAttribute('aria-selected', li.querySelector('.entity-name').textContent === 'sample.wb'));
+  await new Promise(r => setTimeout(r, 1400));
+  const returnedHost = document.getElementById('wolfbook-overleaf-host');
+  const returnedShadow = returnedHost && returnedHost.shadowRoot;
+  say('returning text → binary opens the binary notebook, not the text file',
+      returnedShadow?.querySelector('.wb-title')?.textContent === 'sample.wb',
+      returnedShadow?.querySelector('.wb-title')?.textContent || 'no panel');
 
   document.getElementById('result').textContent = out.join('\\n');
   try { await fetch('/__result', { method: 'POST', body: out.join('\\n') }); } catch (e) {}
@@ -206,7 +262,7 @@ const server = http.createServer((req, res) => {
   if (url.startsWith(`/project/${PROJECT_ID}/blob/`)) {
     blobRequests++;
     res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
-    fs.createReadStream(path.join(root, 'fixtures', 'sample.wb')).pipe(res);
+    res.end(legacyNotebook);
     return;
   }
   if (url === '/__counts') {

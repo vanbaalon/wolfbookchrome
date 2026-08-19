@@ -25,7 +25,7 @@
 // actually touches (`state.doc`, `dispatch`); page-bridge.js itself is the real
 // file, so the message protocol between it and content.js is genuinely covered.
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -41,6 +41,21 @@ if (!fs.existsSync(CHROME)) {
   console.log(`SKIP — Chrome not found at ${CHROME} (set CHROME=...)`);
   process.exit(0);
 }
+
+const WAVE_SOURCE = JSON.stringify({
+  cells: [{ kind: 1, value: '# Wave notebook', languageId: 'markdown', outputs: [], metadata: {} }],
+});
+
+// Text-backed notebooks are now verified against the exact entry named by the
+// active tab in Overleaf's project archive. This fixture deliberately keeps
+// both notebooks in that archive so it can prove a stale CodeMirror buffer is
+// never rendered under the other notebook's title.
+const zipStage = fs.mkdtempSync(path.join(os.tmpdir(), 'wbdoczip-'));
+fs.writeFileSync(path.join(zipStage, 'test.wb'), '');
+fs.writeFileSync(path.join(zipStage, 'WaveFunctionDemo.wb'), WAVE_SOURCE);
+execFileSync('zip', ['-q', 'project.zip', 'test.wb', 'WaveFunctionDemo.wb'], { cwd: zipStage });
+const PROJECT_ZIP = fs.readFileSync(path.join(zipStage, 'project.zip'));
+fs.rmSync(zipStage, { recursive: true, force: true });
 
 const PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>fake overleaf (doc mode)</title>
@@ -83,23 +98,32 @@ const PAGE = `<!doctype html>
             translate="no">close</span></button></div>
         </div>
       </div>
+      <div class="editor-file-tab">
+        <div class="editor-file-tab-content">
+          <span class="editor-file-tab-icon"><span class="material-symbols file-tree-icon unfilled"
+            aria-hidden="true" translate="no">description</span></span>
+          <div class="editor-file-tab-path">\u200EWaveFunctionDemo.wb</div>
+          <div class="editor-file-tab-action"><button class="editor-file-tab-close-action"
+            aria-label="Close"><span class="material-symbols" aria-hidden="true"
+            translate="no">close</span></button></div>
+        </div>
+      </div>
     </div>
     <!-- NO .file-view and NO download link: this is the doc case. Overleaf
          shows its ordinary editor, and the file is empty. -->
-    <!-- Overleaf's editor panel holds its OWN toolbar row as well as the
-         document. Mounting over the whole panel puts our toolbar exactly where
-         theirs already is, so ours is never seen — which is how a doc-backed
-         notebook came up with no toolbar while an uploaded one had one. The
-         panel must therefore be taken over at the DOCUMENT region only. -->
+    <!-- Overleaf's editor panel holds its generic LaTeX toolbar as well as the
+         document. Wolfbook must cover that toolbar: its AI, undo/redo,
+         Code/Visual and Reviewing controls do not apply to a .wb. -->
     <div id="panel-source-editor" style="flex:1;position:relative;display:flex;flex-direction:column">
       <div class="ol-cm-toolbar toolbar-editor" style="height:32px;background:#1e2a35;color:#fff;position:relative;z-index:50">
         Overleaf toolbar (Code / Visual / Editing)
       </div>
-      <!-- The editor is a DIRECT child of the panel, so every candidate pane
-           the probe can find CONTAINS Overleaf's toolbar. Covering it would put
-           our toolbar underneath theirs: still on screen, still the right size,
-           and completely unclickable — which is how Save, Run all and the
-           kernel picker went missing while the notebook itself rendered fine. -->
+      <!-- React retains editors for inactive tabs. Keep a stale one FIRST in
+           DOM order so querySelector('.cm-content') would read/write the wrong
+           file; the bridge must select the visible editor instead. -->
+      <div class="cm-editor" hidden><div class="cm-content"></div></div>
+      <!-- The editor is a DIRECT child of the panel, so the chosen pane also
+           contains the toolbar that Wolfbook must replace. -->
       <div class="cm-editor" style="flex:1;position:relative">
         <div class="cm-scroller"><div class="cm-content" contenteditable="true"></div></div>
       </div>
@@ -112,7 +136,9 @@ const PAGE = `<!doctype html>
 const cmDoc = { text: '' };
 const mkDoc = () => ({ toString: () => cmDoc.text, get length() { return cmDoc.text.length; } });
 window.__cmDoc = cmDoc;
-document.querySelector('.cm-content').cmView = {
+const cmContents = document.querySelectorAll('.cm-content');
+cmContents[0].cmView = { view: { state: { doc: { length: 17, toString: () => 'STALE WRONG FILE' } } } };
+cmContents[1].cmView = {
   view: {
     state: { get doc() { return mkDoc(); } },
     dispatch(tr) {
@@ -153,11 +179,14 @@ const deadline = Date.now() + 40000;
   }
 
   say('a .wb held as a doc still mounts a panel', !!shadow);
-  // The panel must sit BELOW Overleaf's own toolbar, not on top of it.
+  // File tabs stay, but the generic text-editor toolbar is replaced.
+  const tabsBox = document.querySelector('.editor-file-tabs').getBoundingClientRect();
   const olBar = document.querySelector('.ol-cm-toolbar').getBoundingClientRect();
   const hostBox = document.getElementById('wolfbook-overleaf-host').getBoundingClientRect();
-  say('the panel does not cover Overleaf toolbar', hostBox.top >= olBar.bottom - 1,
-      'host top ' + Math.round(hostBox.top) + ' vs toolbar bottom ' + Math.round(olBar.bottom));
+  say('the text route preserves Overleaf file tabs', hostBox.top >= tabsBox.bottom - 1,
+      'host top ' + Math.round(hostBox.top) + ' vs tabs bottom ' + Math.round(tabsBox.bottom));
+  say('the text route replaces Overleaf editor tools', hostBox.top <= olBar.top + 1,
+      'host top ' + Math.round(hostBox.top) + ' vs toolbar top ' + Math.round(olBar.top));
 
   const wbBar = shadow && shadow.querySelector('.wb-toolbar');
   const barBox = wbBar && wbBar.getBoundingClientRect();
@@ -168,12 +197,11 @@ const deadline = Date.now() + 40000;
   say('and it carries the same controls as for an uploaded file',
       !!wbBar && !!wbBar.querySelector('.wb-title') && !!wbBar.querySelector('[data-act="refresh"]'));
 
-  // Measuring is not enough: a panel whose top band sits UNDER Overleaf's own
-  // bar has a perfectly good rectangle and takes no clicks there at all. Sample
-  // the very top of the panel, which is the part that gets covered.
+  // Measuring is not enough: prove the high-z-index Wolfbook host, not the
+  // role="toolbar" element, receives the top-band hit.
   const hostEl = document.getElementById('wolfbook-overleaf-host');
-  const hitTop = document.elementFromPoint(hostBox.left + 30, hostBox.top + 4);
-  say('nothing of Overleaf is painted over the panel',
+  const hitTop = document.elementFromPoint(olBar.left + 30, olBar.top + 4);
+  say('Overleaf editor tools are actually covered',
       !!hitTop && (hitTop === hostEl || hostEl.contains(hitTop)),
       hitTop ? (hitTop.className || hitTop.tagName) : 'nothing there');
 
@@ -188,6 +216,56 @@ const deadline = Date.now() + 40000;
   const nb = shadow && shadow.querySelector('.wb-notebook');
   say('it renders as an empty notebook', !!nb && nb.querySelectorAll('.wb-cell').length === 0,
       nb ? nb.querySelectorAll('.wb-cell').length + ' cells' : 'no notebook');
+
+  // Overleaf marks the new text tab active before CodeMirror changes its
+  // document. Reproduce a deliberately slow handoff in both directions; title
+  // and body must never come from different files.
+  const docTabs = document.querySelectorAll('.editor-file-tab');
+  const waveSource = JSON.stringify({
+    cells: [{ kind: 1, value: '# Wave notebook', languageId: 'markdown', outputs: [], metadata: {} }],
+  });
+  docTabs.forEach((t, i) => t.classList.toggle('editor-file-tab-active', i === 2));
+  setTimeout(() => { window.__cmDoc.text = waveSource; }, 700);
+  await sleep(1800);
+  let switchedHost = document.getElementById('wolfbook-overleaf-host');
+  let switchedShadow = switchedHost && switchedHost.shadowRoot;
+  say('text → text waits for the new editor document',
+      switchedShadow?.querySelector('.wb-title')?.textContent === 'WaveFunctionDemo.wb'
+      && /Wave notebook/.test(switchedShadow?.querySelector('.wb-notebook')?.textContent || ''),
+      (switchedShadow?.querySelector('.wb-title')?.textContent || 'no title') + ' / '
+      + (switchedShadow?.querySelector('.wb-notebook')?.textContent || '').slice(0, 30));
+
+  docTabs.forEach((t, i) => t.classList.toggle('editor-file-tab-active', i === 1));
+  setTimeout(() => { window.__cmDoc.text = ''; }, 700);
+  await sleep(1800);
+  switchedHost = document.getElementById('wolfbook-overleaf-host');
+  switchedShadow = switchedHost && switchedHost.shadowRoot;
+  say('returning text → text restores the right body',
+      switchedShadow?.querySelector('.wb-title')?.textContent === 'test.wb'
+      && switchedShadow?.querySelectorAll('.wb-cell').length === 0,
+      (switchedShadow?.querySelector('.wb-title')?.textContent || 'no title') + ' / '
+      + (switchedShadow?.querySelectorAll('.wb-cell').length ?? -1) + ' cells');
+
+  // The failure seen live: the active tab changes but Overleaf leaves the old
+  // CodeMirror bytes in place. Even if they NEVER hand off, title and body must
+  // still be the same named file, using the project archive as the identity
+  // authority.
+  docTabs.forEach((t, i) => t.classList.toggle('editor-file-tab-active', i === 2));
+  window.__cmDoc.text = ''; // permanently wrong for WaveFunctionDemo.wb
+  await sleep(3400);
+  switchedHost = document.getElementById('wolfbook-overleaf-host');
+  switchedShadow = switchedHost && switchedHost.shadowRoot;
+  say('a permanently stale editor cannot put one file under another title',
+      switchedShadow?.querySelector('.wb-title')?.textContent === 'WaveFunctionDemo.wb'
+      && /Wave notebook/.test(switchedShadow?.querySelector('.wb-notebook')?.textContent || ''),
+      (switchedShadow?.querySelector('.wb-title')?.textContent || 'no title') + ' / '
+      + (switchedShadow?.querySelector('.wb-notebook')?.textContent || '').slice(0, 30));
+  say('the mismatch is disclosed',
+      /editor buffer did not match this tab/i.test(switchedShadow?.querySelector('.wb-note')?.textContent || ''));
+
+  docTabs.forEach((t, i) => t.classList.toggle('editor-file-tab-active', i === 1));
+  window.__cmDoc.text = '';
+  await sleep(1100);
 
   // ── the extension is reloaded under the tab ────────────────────────────
   // Chrome leaves this script running against a DEAD context: chrome.runtime.id
@@ -286,6 +364,12 @@ const deadline = Date.now() + 40000;
         saveBtn ? saveBtn.textContent : 'no save button');
 
     if (saveBtn && !saveBtn.hidden) {
+      // Exercise both dirty-marker mechanisms. A verified doc save must clear
+      // them without needing a destructive re-render.
+      cell.classList.add('wb-cell-edited');
+      const marker = document.createElement('span');
+      marker.className = 'wb-edited-badge';
+      cell.querySelector('.wb-input')?.appendChild(marker);
       saveBtn.click();
       const until = Date.now() + 8000;
       while (!window.__cmDoc.text && Date.now() < until) await sleep(150);
@@ -298,6 +382,8 @@ const deadline = Date.now() + 40000;
       const counts = await (await fetch('/__counts')).json();
       say('a doc is never uploaded as a file', counts.uploads === 0,
           counts.uploads + ' upload(s)');
+      say('a verified save clears edited markers',
+          !shadow.querySelector('.wb-cell-edited, .wb-edited-badge'));
 
       // ── it must refuse to write into a document it did not read ──────────
       // The bridge writes into whichever document Overleaf currently holds, so
@@ -380,8 +466,12 @@ const server = http.createServer((req, res) => {
     res.end(PAGE);
     return;
   }
-  if (url.endsWith('/download/zip')) {    // the fallback we must NOT need here
-    res.writeHead(404); res.end('no zip in this fixture');
+  if (url.endsWith('/download/zip')) {
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Length': PROJECT_ZIP.length,
+    });
+    res.end(PROJECT_ZIP);
     return;
   }
   const file = path.join(root, url);

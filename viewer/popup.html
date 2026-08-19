@@ -5,7 +5,7 @@
 <title>Wolfbook</title>
 <style>
   body {
-    margin: 0; width: 280px;
+    margin: 0; width: 360px;
     font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     color: #1f2328; background: #fff;
   }
@@ -26,6 +26,22 @@
   .status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
                  background: #d0d7de; margin-right: 6px; vertical-align: middle; }
   .status.live .dot { background: #1a7f37; }
+  .status.warning .dot { background: #bf8700; }
+  .status.offline .dot { background: #cf222e; }
+  .status strong { color: #1f2328; }
+  .help { display: none; margin-top: 10px; padding: 9px 10px; border-radius: 6px;
+          background: #fff8c5; color: #3b3200; }
+  .help.visible { display: block; }
+  .help ol { margin: 5px 0 7px; padding-left: 20px; }
+  code { font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .command { display: block; padding: 6px 7px; border-radius: 4px; background: #f6f8fa;
+             border: 1px solid #d8dee4; user-select: all; overflow-wrap: anywhere; }
+  .copy { width: auto; padding: 3px 7px; margin: 5px 0 0; font-size: 11px; }
+  .versions { width: 100%; margin-top: 10px; padding-top: 8px; border-top: 1px solid #eaeef2;
+              border-collapse: collapse; font-size: 11px; color: #57606a; }
+  .versions th { text-align: left; font-weight: 500; padding: 2px 8px 2px 0; }
+  .versions td { text-align: right; color: #1f2328; padding: 2px 0; }
+  .versions small { display: block; color: #6e7781; }
   a { color: #0969da; }
 </style>
 </head>
@@ -43,7 +59,25 @@
       <b>Overleaf notebooks</b>
       <span>Click any .wb in a project — the panel appears there</span>
     </button>
-    <div class="status"><span class="dot"></span><span class="text">checking for a kernel…</span></div>
+    <div class="status"><span class="dot"></span><span class="text">checking the local server…</span></div>
+    <div class="help">
+      <strong>Start the local server</strong>
+      <ol>
+        <li>Install the Wolfbook VS Code extension and Wolfram.</li>
+        <li>In Terminal, open this extension's folder and run:</li>
+      </ol>
+      <code class="command">node server/cli.mjs start</code>
+      <button class="copy" data-act="copy-start">Copy command</button>
+      <div style="margin-top:6px">To start it automatically at login, run
+        <code>node server/cli.mjs enable</code>.</div>
+    </div>
+    <table class="versions" aria-label="Wolfbook component versions">
+      <tr><th>Overleaf extension</th><td data-version="chrome">—</td></tr>
+      <tr><th>wolfbook-serve</th><td data-version="server">—</td></tr>
+      <tr><th>Wolfbook</th><td data-version="wolfbook">—</td></tr>
+      <tr><th>WSTP addon</th><td data-version="wstp">—</td></tr>
+      <tr><th>BTL addon</th><td data-version="btl">—</td></tr>
+    </table>
   </div>
   <script type="module" src="popup.js"></script>
 </body>

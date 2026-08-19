@@ -30,6 +30,11 @@ const ZIP_TTL_MS = 60_000;
 /** @param {string} projectId */
 export function createSourceProvider(projectId, { askBridge } = {}) {
   let zipCache = null; // { at, entries }
+  // A doc save reaches Overleaf through CodeMirror before a subsequent project
+  // archive request is guaranteed to observe it. Remember only sources which
+  // were first tied to an unambiguous archive entry, and update that same
+  // identity after a verified save.
+  const namedSourceCache = new Map(); // visible tab name -> { path, source }
 
   async function fetchZip(force) {
     if (!force && zipCache && Date.now() - zipCache.at < ZIP_TTL_MS) return zipCache.entries;
@@ -56,10 +61,17 @@ export function createSourceProvider(projectId, { askBridge } = {}) {
     if (matches.length === 0) {
       throw new Error(`"${fileName}" is not in the downloaded project. If you just added it, hit ⟳ to refetch.`);
     }
-    // Shallowest wins, but say so.
-    matches.sort((a, b) => a.split('/').length - b.split('/').length);
-    console.warn('[wolfbook] several files named', fileName, matches, '— using', matches[0]);
-    return matches[0];
+    throw new Error(`Several project files are named "${fileName}" (${matches.join(', ')}). `
+      + 'Wolfbook will not guess which one belongs to this tab.');
+  }
+
+  async function getNamedSource(fileName, force) {
+    if (!force && namedSourceCache.has(fileName)) return namedSourceCache.get(fileName);
+    const entries = await fetchZip(force);
+    const p = locate(entries, fileName);
+    const named = { path: p, source: new TextDecoder().decode(entries.get(p)) };
+    namedSourceCache.set(fileName, named);
+    return named;
   }
 
   return {
@@ -67,37 +79,58 @@ export function createSourceProvider(projectId, { askBridge } = {}) {
      * Fetch just the notebook's text.
      *
      * @param {string} fileName basename as shown by Overleaf
-     * @param {{blobUrl?: string|null, force?: boolean, preferEditor?: boolean}} [opts]
-     * @returns {Promise<{source:string, from:string}>}
+     * @param {{blobUrl?: string|null, force?: boolean, preferEditor?: boolean,
+     *          docBacked?: boolean, verifyFileName?: boolean}} [opts]
+    * @returns {Promise<{source:string, from:string}>}
      */
     async getSource(fileName, opts = {}) {
-      // Freshest copy, when Overleaf opened the file in a real editor: this
-      // reflects edits that have not been persisted yet.
-      //
-      // `docBacked` means the .wb IS the open document — Overleaf holds it as a
-      // doc rather than a binary file, which is what everything created inside
-      // Overleaf starts as. Then the editor is authoritative and an EMPTY
-      // buffer is a real answer: a brand-new notebook with no cells yet. The
-      // `{` guard is still right for the speculative case, where `.cm-content`
-      // may well belong to main.tex and its LaTeX must not be read as a .wb.
-      if ((opts.preferEditor || opts.docBacked) && askBridge) {
-        const bridge = await askBridge('get-editor-doc');
-        const doc = bridge && bridge.doc;
-        if (typeof doc === 'string' && (opts.docBacked || doc.trimStart().startsWith('{'))) {
-          return { source: doc, from: 'editor' };
-        }
-      }
-
-      // The Download link's own href — exact, and far cheaper than the zip.
+      // A binary-file view gives us the strongest identity available: the
+      // Download link names the file and points at its content-addressed bytes.
+      // Overleaf may retain a perfectly valid CodeMirror document for a text
+      // tab underneath that view; consulting it first is exactly how test.wb
+      // appeared under a WaveFunctionDemo.wb title.
       if (opts.blobUrl) {
         const res = await fetch(opts.blobUrl, { credentials: 'same-origin' });
-        if (res.ok) return { source: await res.text(), from: 'blob' };
+        if (res.ok) return { source: await res.text(), from: `blob (${fileName})`, path: fileName };
         console.warn('[wolfbook] blob fetch failed', res.status, '— falling back to the project zip');
+        const named = await getNamedSource(fileName, !!opts.force);
+        return { source: named.source, from: `zip (${named.path})`, path: named.path };
       }
 
-      const entries = await fetchZip(!!opts.force);
-      const p = locate(entries, fileName);
-      return { source: new TextDecoder().decode(entries.get(p)), from: 'zip' };
+      // Capture the visible editor as a candidate, never as proof of identity.
+      // `docBacked` means Overleaf holds this .wb as an editable document, but
+      // its SPA can change the active tab title before replacing CodeMirror's
+      // buffer. The archive comparison below binds those bytes to the filename.
+      let editorDoc;
+      if ((opts.preferEditor || opts.docBacked) && askBridge) {
+        const bridge = await askBridge('get-editor-doc');
+        editorDoc = bridge && bridge.doc;
+      }
+
+      // A visible CodeMirror instance proves only that *an* Overleaf document
+      // is mounted. React may retain/swap editors after it has already changed
+      // the active tab title, so accepting that buffer can put test.wb under a
+      // WaveFunctionDemo.wb heading. For a doc-backed notebook, bind the bytes
+      // to the active tab's filename through the project's own archive first.
+      if (opts.docBacked && opts.verifyFileName) {
+        const named = await getNamedSource(fileName, !!opts.force);
+        const editorMatches = typeof editorDoc === 'string' && editorDoc === named.source;
+        return {
+          source: editorMatches ? editorDoc : named.source,
+          from: editorMatches ? `editor (verified as ${named.path})` : `project archive (${named.path})`,
+          path: named.path,
+          verifiedName: true,
+          editorMismatch: typeof editorDoc === 'string' && !editorMatches,
+        };
+      }
+
+      if (typeof editorDoc === 'string'
+          && (!opts.docBacked ? editorDoc.trimStart().startsWith('{') : true)) {
+        return { source: editorDoc, from: 'editor' };
+      }
+
+      const named = await getNamedSource(fileName, !!opts.force);
+      return { source: named.source, from: `zip (${named.path})`, path: named.path };
     },
 
     /**
@@ -119,7 +152,16 @@ export function createSourceProvider(projectId, { askBridge } = {}) {
       return { entries, dir };
     },
 
-    invalidate() { zipCache = null; },
+    /** Keep the verified filename binding coherent after a successful doc save. */
+    remember(fileName, source) {
+      const known = namedSourceCache.get(fileName);
+      if (known) namedSourceCache.set(fileName, { path: known.path, source });
+    },
+
+    invalidate() {
+      zipCache = null;
+      namedSourceCache.clear();
+    },
   };
 }
 

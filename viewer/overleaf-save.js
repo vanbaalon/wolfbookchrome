@@ -1,3 +1,5 @@
+import { parseNotebookJson } from './notebook-json.js';
+
 // overleaf-save.js — write a .wb back to the Overleaf project.
 //
 // Uses Overleaf's OWN upload endpoint, captured from its drag-and-drop UI:
@@ -188,7 +190,7 @@ export function serialiseModel(model, originalSource, editedCells = 0, structura
                                clearedOutputs = 0, savedOutputs = 0) {
   const text = JSON.stringify(model, null, 1) + '\n';
   const cellDelta = (() => {
-    try { return model.cells.length - JSON.parse(originalSource).cells.length; }
+    try { return model.cells.length - parseNotebookJson(originalSource).cells.length; }
     catch (_) { return 0; }
   })();
   const parts = [];
@@ -214,7 +216,7 @@ export function serialiseModel(model, originalSource, editedCells = 0, structura
  * @returns {{text: string, changed: number}}
  */
 export function applyEdits(originalSource, edits) {
-  const wb = JSON.parse(originalSource);
+  const wb = parseNotebookJson(originalSource);
   let changed = 0;
   for (const [index, code] of edits) {
     const cell = wb.cells?.[index];

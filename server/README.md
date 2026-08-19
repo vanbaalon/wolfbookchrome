@@ -41,8 +41,9 @@ evaluation. Correct for agents, wrong for a notebook client. Measured here:
 ## API
 
 ```
-GET  /health         liveness + Wolfram version   (no token — for discovery)
-GET  /v1/info        paths, kernel source, uptime
+GET  /health         liveness + server/Wolfbook/WSTP/BTL/Wolfram versions
+                       (no token — for discovery and the extension popup)
+GET  /v1/info        versions, paths, kernel source, uptime
 POST /v1/eval        {code, cellId?, format?, scale?}
                        → {html, text, outN, messages[], print[], ms}
 POST /v1/interrupt   abort the running evaluation

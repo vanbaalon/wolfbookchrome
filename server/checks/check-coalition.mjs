@@ -105,6 +105,7 @@ try {
 
   // ── a fake Overleaf tab: SSE in, RPC answers out ─────────────────────────
   const seen = [];
+  const requests = [];
   const ac = new AbortController();
   const sse = await fetch(`${s.url}/v1/events?token=${encodeURIComponent(s.token)}`, { signal: ac.signal });
   const model = {
@@ -128,6 +129,7 @@ try {
           if (!/^event: rpc/m.test(block)) continue;
           const req = JSON.parse(block.split('\n').find((l) => l.startsWith('data:')).slice(5).trim());
           seen.push(req.method);
+          requests.push(req);
           let result;
           if (req.method === 'getContext') result = { path: 'x', cells: model.cells };
           else if (req.method === 'editCell') {
@@ -179,6 +181,20 @@ try {
   say('the reply says the change is not published',
       /browser only/i.test(textOf(edited)) && /Save/.test(textOf(edited)),
       textOf(edited).split('\n').pop());
+
+  const canonicalEdit = await invoke('wolfbook_editCell', { cellNumber: 2, content: 'Range[10]' });
+  say('canonical cellNumber is converted from 1-based to browser 0-based',
+      !canonicalEdit.isError && requests.at(-1)?.params?.index === 1,
+      JSON.stringify(requests.at(-1)?.params));
+  const canonicalRun = await invoke('wolfbook_runCell', { cellNumber: 2 });
+  say('canonical single-cell run reaches the intended browser cell',
+      !canonicalRun.isError && requests.at(-1)?.method === 'runCell'
+      && requests.at(-1)?.params?.index === 1);
+  const canonicalRange = await invoke('wolfbook_runCell', { startCell: 1, endCell: 2 });
+  say('canonical inclusive run range is converted correctly',
+      !canonicalRange.isError && requests.at(-1)?.method === 'runCells'
+      && requests.at(-1)?.params?.start === 0 && requests.at(-1)?.params?.end === 1,
+      JSON.stringify(requests.at(-1)?.params));
 
   const ins = await invoke('wolfbook_insertCells', { index: 2, cells: [{ kind: 'code', value: '1+1' }] });
   say('an agent can insert a cell', !ins.isError && model.cells.length === 3, String(model.cells.length));

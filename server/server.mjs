@@ -29,6 +29,7 @@ import { WolfbookKernel } from './kernel.mjs';
 import { Coalition, handleCoalitionRequest } from './coalition.mjs';
 import { NotebookRegistry } from './notebooks.mjs';
 import { makeToolSurface } from './tools.mjs';
+import { WOLFBOOK_SERVE_VERSION } from './version.mjs';
 
 const DEFAULT_PORT = 27300;
 export const STATE_DIR = path.join(os.homedir(), '.wolfbook');
@@ -172,6 +173,8 @@ export async function startServer(opts = {}) {
     if (url.pathname === '/health') {
       return send(res, 200, {
         status: 'ok', service: 'wolfbook-serve', port,
+        serverVersion: WOLFBOOK_SERVE_VERSION,
+        versions: kernel.componentVersions,
         wolframVersion: kernel.wolframVersion, authRequired: requireAuth,
       });
     }
@@ -181,6 +184,8 @@ export async function startServer(opts = {}) {
     try {
       if (url.pathname === '/v1/info') {
         return send(res, 200, {
+          serverVersion: WOLFBOOK_SERVE_VERSION,
+          versions: kernel.componentVersions,
           extensionDir: host.extensionDir,
           kernelExecutable: host.kernelExecutable,
           kernelSource: host.source,

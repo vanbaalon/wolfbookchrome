@@ -15,12 +15,14 @@ const shot = process.argv.includes('--screenshot');
 
 const SUITES = [
   ['module parse', 'check-parse.mjs', []],
+  ['legacy notebook JSON', 'check-notebook-json.mjs', []],
   ['harness pages', 'check-harness.mjs', []],
   ['zip reader', 'check-zip.mjs', []],
   ['markdown', 'check-md.mjs', []],
   ['wolfram tokenizer', 'check-wl-highlight.mjs', []],
   ['viewer in a browser', 'check-browser.mjs', shot ? ['--screenshot'] : []],
   ['standalone viewer page', 'check-standalone.mjs', []],
+  ['toolbar popup', 'check-popup.mjs', []],
   ['content.js integration', 'check-extension.mjs', []],
   ['empty .wb held as a doc', 'check-doc-notebook.mjs', []],
   ['evaluation', 'check-evaluate.mjs', []],

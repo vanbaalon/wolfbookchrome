@@ -22,6 +22,11 @@
   let lastMountError = null;    // surfaced by the diagnostics
   let suppressTeardownUntil = 0;
   let currentAttachedId = null;   // module-scope mirror, so teardown can detach
+  let mountEpoch = 0;             // cancels async work from an older selected tab
+  let lastDocFile = null;         // synchronise Overleaf's async text-buffer handoff
+  let lastDocSource = null;
+  const ATTACH_HEARTBEAT_MS = Math.max(500,
+    Number(globalThis.__WB_ATTACH_HEARTBEAT_MS) || 10_000);
 
   const log = (...a) => console.debug('[wolfbook]', ...a);
 
@@ -79,7 +84,13 @@
    * directly instead of pulling the entire project zip for it.
    */
   function probeFileView() {
+    const usable = (el) => {
+      if (!el || el.hidden || el.closest('[hidden]')) return false;
+      const s = getComputedStyle(el);
+      return s.display !== 'none' && s.visibility !== 'hidden';
+    };
     for (const view of document.querySelectorAll('.file-view, [class*="file-view"]')) {
+      if (!usable(view)) continue;
       const link = view.querySelector('a[download]');
       if (!link) continue;
       const name = clean(link.getAttribute('download'));
@@ -87,7 +98,7 @@
       return { name, blobUrl: link.getAttribute('href') || null, view };
     }
     // The link alone, if Overleaf reshuffles its container.
-    const loose = document.querySelector('a[download$=".wb"]');
+    const loose = [...document.querySelectorAll('a[download$=".wb"]')].find(usable);
     if (loose) {
       return {
         name: clean(loose.getAttribute('download')),
@@ -196,6 +207,11 @@
 
   /** The file currently on screen, most reliable source first. */
   function probeSelectedFile() {
+    // A VISIBLE binary view is the strongest possible signal: its Download
+    // link names the bytes actually on screen. Overleaf creates this pane
+    // before it updates the active-tab marker when returning from a text file.
+    // probeFileView() deliberately ignores hidden/stale views retained for
+    // another tab, so those cannot steal selection in the opposite direction.
     const fv = probeFileView();
     if (fv && fv.name) return fv.name;
 
@@ -256,15 +272,19 @@
     // 3. the text editor, if this file did open in one — i.e. a .wb Overleaf
     //    holds as a DOC.
     //
-    // THIS IS TRIED BEFORE the named panels below, and the order is the whole
-    // point: #panel-source-editor contains Overleaf's OWN toolbar row (the
-    // Code/Visual toggle and the review-mode menu) as well as the document. A
-    // panel covering all of it puts our toolbar in the same place as theirs,
-    // where it is simply not seen — which is exactly how a doc-backed notebook
-    // came up with no toolbar while an uploaded one had one. The binary branch
-    // above already mounts over the CONTENT region only (the .file-view's
-    // parent), so matching that here is what makes the two look the same.
-    const cm = document.querySelector('.cm-editor');
+    // #panel-source-editor contains Overleaf's generic LaTeX editor toolbar
+    // (AI, undo/redo, Code/Visual, Reviewing) as well as the document. Those
+    // controls do not apply to a Wolfbook notebook and are intentionally
+    // covered by our host. The FILE TAB STRIP is preserved separately below.
+    const cm = [...document.querySelectorAll('.cm-editor')].filter((el) => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        if (n.hidden || n.getAttribute?.('aria-hidden') === 'true') return false;
+        const s = getComputedStyle(n);
+        if (s.display === 'none' || s.visibility === 'hidden') return false;
+      }
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }).at(-1) || null;
     if (cm && cm.parentElement && isPaneSized(cm.parentElement)) return cm.parentElement;
     if (cm && isPaneSized(cm)) return cm;
 
@@ -592,19 +612,26 @@
   // ── module loading ────────────────────────────────────────────────────────
   async function loadModules() {
     if (mods) return mods;
-    const url = (p) => chrome.runtime.getURL(p);
-    const [viewer, source, katex, renderer] = await Promise.all([
+    // Dynamic extension modules otherwise keep a stable chrome-extension://
+    // URL across an unpacked-extension reload. Give each release a distinct
+    // module identity so Chrome cannot resurrect pre-fix source-selection code
+    // from its module/HTTP cache after the person has explicitly reloaded it.
+    const build = chrome.runtime.getManifest?.().version || 'dev';
+    const url = (p) => `${chrome.runtime.getURL(p)}?v=${encodeURIComponent(build)}`;
+    const [viewer, source, notebookJson, katex, renderer] = await Promise.all([
       import(url('viewer/wb-viewer.js')),
       import(url('viewer/source.js')),
+      import(url('viewer/notebook-json.js')),
       import(url('vendor/katex-css.js')),
       import(url('vendor/renderer-css.js')),
     ]);
-    mods = { viewer, source, katexCss: katex.KATEX_CSS, wlCss: renderer.WL_CSS };
+    mods = { viewer, source, notebookJson, katexCss: katex.KATEX_CSS, wlCss: renderer.WL_CSS };
     return mods;
   }
 
   // ── panel ─────────────────────────────────────────────────────────────────
   function teardown() {
+    mountEpoch++;
     if (currentAttachedId) {
       mcp({ cmd: 'serve-detach', notebookId: currentAttachedId });
       currentAttachedId = null;
@@ -646,7 +673,10 @@
   }
 
   async function mount(fileName) {
+    const previousEditorSource = lastDocFile && lastDocFile !== fileName
+      ? lastDocSource : null;
     teardown();
+    const epoch = mountEpoch;
     const pane = probeEditorPane();
     if (!pane) { diagnose(`found "${fileName}" but no editor pane to mount over`); return; }
     if (!contextAlive()) {
@@ -658,30 +688,30 @@
 
     const host = document.createElement('div');
     host.id = HOST_ID;
+    host.dataset.wbBuild = chrome.runtime.getManifest?.().version || 'dev';
     pane.appendChild(host);
+    host.dataset.wbFile = fileName;
+    const isCurrentMount = () => epoch === mountEpoch
+      && currentFile === fileName && host.isConnected;
 
-    /**
-     * Never cover Overleaf's own toolbar.
-     *
-     * Which container we get depends on TIMING: on a fresh load the CodeMirror
-     * editor may not exist yet, so the pane probe falls back to the whole
-     * editor panel — which also holds Overleaf's toolbar row. Our panel then
-     * starts at the top of that row and our toolbar is painted underneath
-     * theirs: the notebook renders, but Save, Run all and the kernel picker are
-     * simply unreachable, which reads as "the features are missing".
-     *
-     * So measure the chrome inside whatever pane we were given and start below
-     * it. Re-measured on resize, because the Visual-mode toolbar is taller.
-     */
+    /** Preserve Overleaf's FILE TABS, but replace all editor-specific chrome. */
     const clearOverleafChrome = () => {
-      const bar = pane.querySelector(
-        '.ol-cm-toolbar, .toolbar-editor, .toolbar-pdf, [class*="toolbar-editor"]');
-      if (!bar || !pane.contains(bar) || bar.contains(host)) { host.style.top = '0px'; return; }
-      const b = bar.getBoundingClientRect();
       const p = pane.getBoundingClientRect();
-      // Only a bar at the TOP of the pane is chrome we must clear; one further
-      // down is part of the document region and covering it is correct.
-      const offset = b.height > 8 && b.top - p.top < 60 ? Math.round(b.bottom - p.top) : 0;
+      const bars = [...pane.querySelectorAll([
+        '.editor-file-tabs', '[role="tablist"]', '[class*="tab-bar"]',
+        '[class*="tabs-container"]',
+      ].join(', '))];
+      let offset = 0;
+      for (const bar of bars) {
+        if (!pane.contains(bar) || bar.contains(host) || host.contains(bar)) continue;
+        const b = bar.getBoundingClientRect();
+        // Preserve every FILE TAB strip stacked at the top of the selected
+        // pane. Do not preserve role="toolbar"/.ol-cm-toolbar: AI, undo/redo,
+        // Code/Visual and Reviewing are meaningless for the Wolfbook editor.
+        if (b.height > 8 && b.top - p.top >= -1 && b.top - p.top < 120) {
+          offset = Math.max(offset, Math.round(b.bottom - p.top));
+        }
+      }
       host.style.top = `${Math.max(0, offset)}px`;
     };
     clearOverleafChrome();
@@ -700,6 +730,7 @@
     try {
       loaded = await loadModules();
     } catch (e) {
+      if (!isCurrentMount()) return;
       host.textContent = '';
       const box = document.createElement('div');
       box.style.cssText = 'padding:16px;font:13px system-ui;color:#82071e;background:#fff5f5';
@@ -709,7 +740,8 @@
       log('module load failed', e);
       return;
     }
-    const { viewer, source, katexCss, wlCss } = loaded;
+    if (!isCurrentMount()) return;
+    const { viewer, source, notebookJson, katexCss, wlCss } = loaded;
     if (!provider) provider = source.createSourceProvider(projectId, { askBridge });
 
     const shadow = viewer.createViewerSurface(host, { katexCss, wlCss });
@@ -743,6 +775,7 @@
     // Set from the extension URL rather than inlined in the markup, so the
     // sanitiser and CSP have nothing to argue with.
     root.querySelector('.wb-logo').src = chrome.runtime.getURL('vendor/wolfbook-icon.png');
+    root.querySelector('.wb-logo').title = `Wolfbook Overleaf extension v${host.dataset.wbBuild}`;
     shadow.appendChild(root);
 
     const body = root.querySelector('.wb-body');
@@ -758,7 +791,10 @@
     // hundreds of lines earlier, and a `let` in the temporal dead zone throws
     // ReferenceError the moment the timer is set up.
     let keepAttachedTimer = null;
+    let attachInFlight = null;
     let loadedBlobUrl = null;  // content-addressed → doubles as a version token
+    let renderSeq = 0;         // newest render wins within this mount
+    let hasRendered = false;
 
     // Tier-2 probe: is a local wolfbook running? Everything that needs the
     // local machine stays disabled and out of the way until it answers.
@@ -1051,6 +1087,8 @@
     });
 
     async function render(force = false) {
+      const thisRender = ++renderSeq;
+      let pendingResolver = null;
       body.textContent = '';
       const status = document.createElement('div');
       status.className = 'wb-status';
@@ -1059,6 +1097,13 @@
       note.textContent = '';
 
       try {
+        // Overleaf updates the active tab before it swaps the editor document.
+        // Give that second phase a short settling window on the first read;
+        // otherwise a fast tab switch can label the previous buffer as the new
+        // file. Every await below is guarded so late work can never repaint a
+        // newer tab.
+        if (!hasRendered) await new Promise((resolve) => setTimeout(resolve, 220));
+        if (!isCurrentMount() || thisRender !== renderSeq) return;
         // The Download link's href is re-read each time: Overleaf re-renders it,
         // and the sha changes when a collaborator saves.
         const fv = probeFileView();
@@ -1067,10 +1112,35 @@
         //   uploaded  → a binary FILE, shown as "no preview" + a Download link
         //   created   → a DOC, opened in CodeMirror like any .tex
         // Everything made inside Overleaf — including "New file" — is a doc.
-        docBacked = !blobUrl && !!document.querySelector('.cm-content');
-        const got = await provider.getSource(fileName, { blobUrl, force, preferEditor: true, docBacked });
-        loadedSource = got.source;
-        loadedBlobUrl = blobUrl;
+        const nextDocBacked = !blobUrl && !!probeEditorPane()?.querySelector('.cm-content');
+
+        // For two text-backed .wb tabs, Overleaf flips the active-tab class
+        // before CodeMirror swaps documents. Reading immediately gives the new
+        // title with the previous file's body. Wait for the editor bytes to
+        // hand off; identical files take the bounded timeout and are harmless.
+        if (nextDocBacked && previousEditorSource != null && !hasRendered) {
+          const handoffDeadline = Date.now() + 2500;
+          while (Date.now() < handoffDeadline) {
+            const bridge = await askBridge('get-editor-doc');
+            if (!isCurrentMount() || thisRender !== renderSeq) return;
+            if (typeof bridge?.doc === 'string' && bridge.doc !== previousEditorSource) break;
+            await new Promise((resolve) => setTimeout(resolve, 75));
+          }
+        }
+
+        const got = await provider.getSource(fileName, {
+          blobUrl, force, preferEditor: nextDocBacked, docBacked: nextDocBacked,
+          verifyFileName: nextDocBacked,
+        });
+        // Re-read the actual Overleaf title after all network/editor awaits.
+        // The source provider proves which file the bytes belong to; this check
+        // proves that file is still the one whose tab is active at commit time.
+        if (probeSelectedFile() !== fileName) {
+          log('discarding source because the active tab changed while loading', fileName);
+          queueMicrotask(sync);
+          return;
+        }
+        if (!isCurrentMount() || thisRender !== renderSeq) return;
 
         if (mode === 'source') {
           const pre = document.createElement('pre');
@@ -1078,34 +1148,57 @@
           pre.textContent = got.source;
           body.textContent = '';
           body.appendChild(pre);
-          note.textContent = `${(got.source.length / 1024).toFixed(0)} KB · from ${got.from}`;
+          loadedSource = got.source;
+          loadedBlobUrl = blobUrl;
+          docBacked = nextDocBacked;
+          if (nextDocBacked) { lastDocFile = fileName; lastDocSource = got.source; }
+          hasRendered = true;
+          note.textContent = `v${host.dataset.wbBuild} · ${(got.source.length / 1024).toFixed(0)} KB · from ${got.from}`
+            + (got.editorMismatch ? ' · editor buffer did not match this tab' : '');
           return;
         }
 
         // A blank file is a NEW notebook, not a broken one. Overleaf's "New
         // file" writes zero bytes, so the first thing a user ever sees of a
         // notebook they just created was a JSON parse error.
+        let nextParsed;
         if (!got.source.trim()) {
-          parsed = { cells: [] };
+          nextParsed = { cells: [] };
         } else {
-          try { parsed = JSON.parse(got.source); }
+          try { nextParsed = notebookJson.parseNotebookJson(got.source); }
           catch (e) { throw new Error(`This file is not valid .wb JSON (${e.message}). Use Source to inspect it.`); }
         }
 
-        // Only download the whole project when an image actually needs it.
-        if (lastResolver?.dispose) lastResolver.dispose();
-        lastResolver = null;
+        // Build the next view off to the side and commit it atomically. A
+        // superseded render must not replace `parsed` while leaving the old DOM
+        // visible — that split-brain state made MCP see two cells while the
+        // person still saw seven.
         let assetNote = '';
         if (source.referencesAssets(got.source)) {
           status.textContent = 'Downloading project images…';
           try {
             const assets = await provider.getAssets(fileName, { force });
-            lastResolver = viewer.makeAssetResolver(assets.entries, assets.dir);
+            if (!isCurrentMount() || thisRender !== renderSeq) return;
+            pendingResolver = viewer.makeAssetResolver(assets.entries, assets.dir);
           } catch (e) {
             assetNote = 'images unavailable';
             log('asset fetch failed', e);
           }
         }
+
+        if (!isCurrentMount() || thisRender !== renderSeq) {
+          pendingResolver?.dispose?.();
+          return;
+        }
+        if (lastResolver?.dispose) lastResolver.dispose();
+        lastResolver = pendingResolver;
+        pendingResolver = null;
+        parsed = nextParsed;
+        loadedSource = got.source;
+        loadedBlobUrl = blobUrl;
+        docBacked = nextDocBacked;
+        if (nextDocBacked) { lastDocFile = fileName; lastDocSource = got.source; }
+        hasRendered = true;
 
         body.textContent = '';
         const nb = document.createElement('div');
@@ -1120,12 +1213,16 @@
           structure: lastStructure = makeStructure(),
         });
 
-        const bits = [`${stats.cells} cells`, `${stats.outputs} outputs`];
+        const bits = [`v${host.dataset.wbBuild}`, `${stats.cells} cells`, `${stats.outputs} outputs`];
+        bits.push(`from ${got.from}`);
+        if (got.editorMismatch) bits.push(`verified ${got.path}; editor buffer did not match this tab`);
         if (stats.missingAssets) bits.push(`${stats.missingAssets} image(s) not in project`);
         if (assetNote) bits.push(assetNote);
         if (stats.interactive.length) bits.push(`${stats.interactive.join('/')} interactive in Wolfbook`);
         note.textContent = bits.join(' · ');
       } catch (e) {
+        pendingResolver?.dispose?.();
+        if (!isCurrentMount() || thisRender !== renderSeq) return;
         body.textContent = '';
         const box = document.createElement('div');
         box.className = 'wb-error-box';
@@ -1382,10 +1479,15 @@
           // The model IS what is on screen now, so mark it clean in place
           // rather than re-rendering and dropping live outputs and open editors.
           loadedSource = text;
+          lastDocFile = fileName;
+          lastDocSource = text;
+          provider.remember(fileName, text);
           for (const st of (lastStats?.cellStates || [])) {
             st.original = st.code;
             st.outputsStale = false;
           }
+          for (const el of nbRoot().querySelectorAll('.wb-edited-badge')) el.remove();
+          for (const el of nbRoot().querySelectorAll('.wb-cell-edited')) el.classList.remove('wb-cell-edited');
           structureDirty = false;
           holdMessage(`Saved — ${changed}`, 5000);
           note.textContent = `saved into the Overleaf document (${(text.length / 1024).toFixed(1)} KB)`;
@@ -1710,7 +1812,9 @@
           // The server came back (restarted, or started after this tab). Say we
           // are here again — attach is keyed on (project, file), so this is a
           // no-op when nothing was lost.
-          attachToCoalition().catch(() => {});
+          attachedId = null;
+          currentAttachedId = null;
+          attachToCoalition().catch((e) => log('coalition reattach failed', e));
           reply({ handled: true });
           return true;
         }
@@ -1740,26 +1844,47 @@
           keepAttachedTimer = null;
           return;
         }
-        if (attachedId) return;
-        attachToCoalition().catch(() => {});
-      }, 20_000);
+        // Do this even when attachedId is set. In MV3 the background service
+        // worker may be suspended, closing its SSE stream; the server then
+        // removes the notebook while this page still holds the obsolete id.
+        // A fresh serve-attach both wakes the worker and is idempotent while
+        // the old stream remains healthy.
+        attachToCoalition().catch((e) => log('coalition heartbeat failed', e));
+      }, ATTACH_HEARTBEAT_MS);
     }
 
     /** Tell wolfbook-serve this notebook exists, so agents can find it. */
     async function attachToCoalition() {
-      const res = await mcp({
-        cmd: 'serve-attach',
-        notebook: {
-          projectId,
-          projectName: document.title.replace(/\s*-\s*Overleaf.*$/i, '').trim() || projectId,
-          fileName,
-        },
-      });
-      if (res && res.ok && res.result) {
+      if (attachInFlight) return attachInFlight;
+      attachInFlight = (async () => {
+        const res = await mcp({
+          cmd: 'serve-attach',
+          notebook: {
+            projectId,
+            projectName: document.title.replace(/\s*-\s*Overleaf.*$/i, '').trim() || projectId,
+            fileName,
+          },
+        });
+        if (!(res && res.ok && res.result)) {
+          attachedId = null;
+          currentAttachedId = null;
+          host.dataset.wbMcpAttached = 'false';
+          throw new Error(res?.error || 'wolfbook-serve did not accept the notebook attachment');
+        }
+        if (res.result.routeBound === false) {
+          attachedId = null;
+          currentAttachedId = null;
+          host.dataset.wbMcpAttached = 'false';
+          throw new Error('the notebook registered, but Chrome did not bind it to this tab');
+        }
         attachedId = res.result.notebookId;
         currentAttachedId = attachedId;
+        host.dataset.wbMcpAttached = 'true';
         log('attached to the coalition as', res.result.path);
-      }
+        return res.result;
+      })();
+      try { return await attachInFlight; }
+      finally { attachInFlight = null; }
     }
 
     // ── notebook-level actions ───────────────────────────────────────────

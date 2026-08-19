@@ -37,6 +37,11 @@ export class WolfbookKernel {
     this.busy = false;
     this.startedAt = null;
     this.wolframVersion = null;
+    this.componentVersions = {
+      wolfbook: 'unknown', wolfbookBuildDate: 'unknown',
+      wstp: 'unknown', wstpBuildDate: 'unknown',
+      btl: 'unknown', btlBuildDate: 'unknown',
+    };
   }
 
   async start() {
@@ -50,6 +55,21 @@ export class WolfbookKernel {
     if (btlPath) {
       try { this.btl = require(btlPath); } catch (_) { this.btl = null; }
     }
+
+    // Mirror WBVersion[]: package metadata identifies Wolfbook itself, while
+    // native addon exports identify the binaries ACTUALLY selected above.
+    // Reading prebuilds/VERSION would only describe what ought to be loaded.
+    try {
+      const pkgPath = path.join(this.host.extensionDir, 'package.json');
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      this.componentVersions.wolfbook = pkg.version || 'unknown';
+      this.componentVersions.wolfbookBuildDate =
+        new Date(fs.statSync(pkgPath).mtimeMs).toISOString().slice(0, 10);
+    } catch (_) {}
+    if (typeof wstp.version === 'string') this.componentVersions.wstp = wstp.version;
+    if (typeof wstp.buildDate === 'string') this.componentVersions.wstpBuildDate = wstp.buildDate;
+    if (this.btl && typeof this.btl.version === 'string') this.componentVersions.btl = this.btl.version;
+    if (this.btl && typeof this.btl.buildDate === 'string') this.componentVersions.btlBuildDate = this.btl.buildDate;
 
     this.session = new wstp.WstpSession(this.host.kernelExecutable);
     this.startedAt = Date.now();

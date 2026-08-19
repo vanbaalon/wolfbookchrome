@@ -203,8 +203,8 @@ export const THEME_CSS = `
 .wb-editor .cm-editor { max-height: 60vh; }
 .wb-edited-badge {
   flex: 0 0 auto; align-self: flex-start;
-  margin-left: 6px; padding: 1px 7px;
-  font-size: 10px; border-radius: 8px;
+  margin: 3px 3px 0 5px; padding: 1px 4px;
+  font: 500 8px/1 var(--vscode-font-family); border-radius: 5px;
   background: #fff8c5; color: #9a6700; border: 1px solid #d4a72c;
   user-select: none;
 }
@@ -291,9 +291,13 @@ export const THEME_CSS = `
 .wb-editor-md { margin: 4px 0; }
 .wb-cell-edited::before {
   content: 'edited';
-  position: absolute; top: -9px; left: 6px;
-  font-size: 9px; padding: 1px 6px; border-radius: 8px;
+  /* Stay inside the cell. The old negative top escaped into the previous
+     output/heading and created the apparent wrong stacking level. */
+  position: absolute; top: 3px; right: 7px; z-index: 2;
+  font: 500 8px/1 var(--vscode-font-family);
+  padding: 1px 4px; border-radius: 5px;
   background: #fff8c5; color: #9a6700; border: 1px solid #d4a72c;
+  pointer-events: none; user-select: none;
 }
 
 /* A stored output that no longer matches its code: hidden, but recoverable —

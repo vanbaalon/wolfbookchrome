@@ -31,15 +31,50 @@ document.querySelector('[data-act=overleaf]').addEventListener('click', () => {
   });
 });
 
-// Kernel status, purely informational — everything above works without one.
+const setVersion = (name, value, built) => {
+  const el = document.querySelector(`[data-version="${name}"]`);
+  if (!el) return;
+  el.textContent = value && value !== 'unknown' ? `v${value}` : '—';
+  if (built && built !== 'unknown') {
+    const small = document.createElement('small');
+    small.textContent = `built ${built}`;
+    el.appendChild(small);
+  }
+};
+
+setVersion('chrome', chrome.runtime.getManifest().version);
+
+// Local-server status and the versions of the exact native binaries it loaded.
 const status = document.querySelector('.status');
 const text = status.querySelector('.text');
 chrome.runtime.sendMessage({ cmd: 'serve-status' }, (res) => {
   void chrome.runtime.lastError;
-  if (res?.ok && res.running) {
+  const running = !!(res?.ok && (res.connected || res.running));
+  if (running) {
     status.classList.add('live');
-    text.textContent = `wolfbook-serve on :${res.port} — cells can run`;
+    if (!res.authorised) status.classList.add('warning');
+    text.innerHTML = `<strong>Local server running</strong> on 127.0.0.1:${Number(res.port)}`
+      + (res.authorised ? ' — cells can run' : ' — token needed on first run');
   } else {
-    text.textContent = 'no local kernel — notebooks open read-only';
+    status.classList.add('offline');
+    text.innerHTML = '<strong>Local server not running</strong> — notebooks open read-only';
+    document.querySelector('.help').classList.add('visible');
+  }
+
+  const health = res?.health || {};
+  const info = res?.info || {};
+  const versions = info.versions || health.versions || {};
+  setVersion('server', info.serverVersion || health.serverVersion);
+  setVersion('wolfbook', versions.wolfbook, versions.wolfbookBuildDate);
+  setVersion('wstp', versions.wstp, versions.wstpBuildDate);
+  setVersion('btl', versions.btl, versions.btlBuildDate);
+});
+
+document.querySelector('[data-act=copy-start]').addEventListener('click', async (ev) => {
+  try {
+    await navigator.clipboard.writeText('node server/cli.mjs start');
+    ev.currentTarget.textContent = 'Copied ✓';
+  } catch (_) {
+    ev.currentTarget.textContent = 'Select the command above';
   }
 });

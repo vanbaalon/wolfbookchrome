@@ -6,7 +6,9 @@
 #wolfbook-overleaf-host {
   position: absolute;
   inset: 0;
-  z-index: 40;
+  /* Above Overleaf's editor-tools toolbar. The host is offset below its FILE
+     TABS in content.js, so increasing this does not hide the tab strip. */
+  z-index: 1000;
   background: #fff;
   overflow: hidden;
   contain: layout paint;

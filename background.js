@@ -181,6 +181,7 @@ const SERVE_PORT_MIN = 27300;
 const SERVE_PORT_MAX = 27309;
 
 let servePort = null;   // cached across calls; re-probed when a request fails
+let serveHealth = null; // public /health payload from the last successful probe
 
 async function getServeToken() {
   try {
@@ -197,16 +198,21 @@ async function findServePort(force = false) {
       const body = await res.json();
       // /health is unauthenticated so it can be used for discovery; check that
       // it is actually our server and not something else on the port.
-      if (body?.service === 'wolfbook-serve') { servePort = port; return port; }
+      if (body?.service === 'wolfbook-serve') {
+        servePort = port;
+        serveHealth = body;
+        return port;
+      }
     } catch (_) { /* not this port */ }
   }
   servePort = null;
+  serveHealth = null;
   return null;
 }
 
 async function serveStatus() {
   const port = await findServePort(true);
-  if (!port) return { ok: true, connected: false };
+  if (!port) return { ok: true, connected: false, running: false, health: null };
   const token = await getServeToken();
   let authorised = false, info = null;
   if (token) {
@@ -218,20 +224,35 @@ async function serveStatus() {
       if (res.ok) info = await res.json();
     } catch (_) {}
   }
-  return { ok: true, connected: true, port, authorised, hasToken: !!token, info };
+  return {
+    ok: true, connected: true, running: true, port, authorised,
+    hasToken: !!token, health: serveHealth, info,
+  };
 }
 
 async function serveEval(args) {
-  const port = await findServePort();
+  // Re-probe on every user evaluation. The daemon is routinely restarted
+  // during upgrades, often on the same port, and a cached pre-restart answer
+  // made an already-open notebook claim it was still offline indefinitely.
+  let port = await findServePort(true);
   if (!port) throw new Error('wolfbook-serve is not running.');
   const token = await getServeToken();
   if (!token) throw new Error('No token for wolfbook-serve. Paste the token it printed at startup.');
 
-  const res = await fetch(`http://127.0.0.1:${port}/v1/eval`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Wolfbook-Token': token },
+  const request = (at) => fetch(`http://127.0.0.1:${at}/v1/eval`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wolfbook-Token': token },
     body: JSON.stringify(args || {}),
   });
+  let res;
+  try {
+    res = await request(port);
+  } catch (_) {
+    // Cover the narrow restart race between the health check and POST once.
+    servePort = null;
+    port = await findServePort(true);
+    if (!port) throw new Error('wolfbook-serve is not running.');
+    res = await request(port);
+  }
   if (res.status === 401) throw new Error('wolfbook-serve rejected the token.');
   if (res.status === 409) throw new Error('The kernel is busy with another evaluation.');
   if (!res.ok) throw new Error(`wolfbook-serve returned HTTP ${res.status}`);
@@ -250,6 +271,51 @@ async function serveEval(args) {
 // must outlive any single Overleaf tab's render cycle.
 
 let rpcStream = null;
+// Notebook id -> the concrete Chrome tab which announced it. Enumerating tabs
+// is only a fallback: on some Chrome profiles URL-filtered and even unfiltered
+// tabs.query calls return no rows inside a restarted MV3 worker, despite the
+// content script in that tab being alive.
+const notebookTabIds = new Map();
+const NOTEBOOK_TAB_BINDINGS_KEY = 'wbNotebookTabIds';
+
+async function routeStorageGet() {
+  const area = chrome.storage?.session || chrome.storage?.local;
+  if (!area) return {};
+  try {
+    const row = await area.get(NOTEBOOK_TAB_BINDINGS_KEY);
+    return row?.[NOTEBOOK_TAB_BINDINGS_KEY] || {};
+  } catch (_) { return {}; }
+}
+
+async function rememberNotebookTab(notebookId, tabId) {
+  if (!notebookId || !Number.isInteger(tabId)) return false;
+  notebookTabIds.set(notebookId, tabId);
+  const all = await routeStorageGet();
+  all[notebookId] = tabId;
+  const area = chrome.storage?.session || chrome.storage?.local;
+  try { await area?.set({ [NOTEBOOK_TAB_BINDINGS_KEY]: all }); } catch (_) {}
+  return true;
+}
+
+async function forgetNotebookTab(notebookId) {
+  notebookTabIds.delete(notebookId);
+  const all = await routeStorageGet();
+  if (!(notebookId in all)) return;
+  delete all[notebookId];
+  const area = chrome.storage?.session || chrome.storage?.local;
+  try { await area?.set({ [NOTEBOOK_TAB_BINDINGS_KEY]: all }); } catch (_) {}
+}
+
+async function resolveNotebookTab(notebookId) {
+  const hot = notebookTabIds.get(notebookId);
+  if (Number.isInteger(hot)) return hot;
+  const stored = (await routeStorageGet())[notebookId];
+  if (Number.isInteger(stored)) {
+    notebookTabIds.set(notebookId, stored);
+    return stored;
+  }
+  return null;
+}
 
 async function connectRpc(onRequest) {
   const port = await findServePort();
@@ -316,11 +382,27 @@ let rpcRetryTimer = null;
 let rpcRetryDelay = 5_000;
 const RPC_RETRY_MAX = 60_000;
 
+async function queryOverleafTabs() {
+  // Keep this in lockstep with manifest.json. Overleaf may use either the bare
+  // domain or a subdomain; the content script supports both, so reverse MCP
+  // routing must not silently lose tabs on the bare-domain route.
+  const matched = await chrome.tabs.query({ url: [
+    '*://*.overleaf.com/project/*',
+    '*://overleaf.com/project/*',
+  ] }).catch(() => []);
+  if (matched.length) return matched;
+
+  // Some Chrome builds/profiles return no rows for a URL-filtered query even
+  // though the content script is alive in that tab. Messaging every tab is a
+  // safe fallback: tabs without Wolfbook have no listener and are skipped.
+  return chrome.tabs.query({}).catch(() => []);
+}
+
 function scheduleRpcReconnect() {
   if (rpcRetryTimer) return;
   rpcRetryTimer = setTimeout(async () => {
     rpcRetryTimer = null;
-    const tabs = await chrome.tabs.query({ url: ['*://*.overleaf.com/project/*'] });
+    const tabs = await queryOverleafTabs();
     // No tab to serve: stop retrying rather than polling a dead port forever.
     if (!tabs.length) { rpcRetryDelay = 5_000; return; }
     const stream = await connectRpc(dispatchToTab).catch(() => null);
@@ -338,8 +420,24 @@ function scheduleRpcReconnect() {
 
 /** Forward an agent's request to whichever Overleaf tab holds that notebook. */
 async function dispatchToTab(req) {
-  const tabs = await chrome.tabs.query({ url: ['*://*.overleaf.com/project/*'] });
-  let lastError = 'no Overleaf tab is open';
+  const boundTabId = await resolveNotebookTab(req?.notebookId);
+  let boundError = null;
+  if (Number.isInteger(boundTabId)) {
+    try {
+      const reply = await chrome.tabs.sendMessage(boundTabId, { cmd: 'wb-rpc', req });
+      if (reply && reply.handled) {
+        if (reply.error) throw new Error(reply.error);
+        return reply.result;
+      }
+    } catch (e) {
+      // The tab may genuinely have closed. Remove only this stale binding and
+      // retain the enumeration fallback for older attachments.
+      await forgetNotebookTab(req.notebookId);
+      boundError = String(e?.message || e);
+    }
+  }
+  const tabs = await queryOverleafTabs();
+  let lastError = boundError || 'no Overleaf tab is open';
   for (const tab of tabs) {
     try {
       const reply = await chrome.tabs.sendMessage(tab.id, { cmd: 'wb-rpc', req });
@@ -353,7 +451,7 @@ async function dispatchToTab(req) {
   throw new Error(lastError);
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       if (msg?.cmd === 'mcp-status') {
@@ -366,16 +464,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(await serveStatus());
       } else if (msg?.cmd === 'serve-attach') {
         // A tab has opened a .wb; make sure the RPC stream is up, then attach.
-        await connectRpc(dispatchToTab);
+        const stream = await connectRpc(dispatchToTab);
+        if (!stream) {
+          sendResponse({ ok: false, error: 'could not open the wolfbook-serve RPC stream' });
+          return;
+        }
         const port = await findServePort();
         const token = await getServeToken();
         if (!port || !token) { sendResponse({ ok: false, error: 'wolfbook-serve unavailable' }); return; }
-        const res = await fetch(`http://127.0.0.1:${port}/v1/notebooks/attach`, {
+        const requestAttach = () => fetch(`http://127.0.0.1:${port}/v1/notebooks/attach`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Wolfbook-Token': token },
           body: JSON.stringify(msg.notebook || {}),
         });
-        sendResponse({ ok: res.ok, result: res.ok ? await res.json() : null });
+        let res = await requestAttach();
+        let payload = await res.json().catch(() => ({}));
+        // A server restart on the same port can leave the worker holding an
+        // obsolete rpcStream object for the few milliseconds before its reader
+        // reports EOF. Recover in this call instead of waiting for another
+        // heartbeat and returning an unexplained empty registry.
+        if (!res.ok && /open \/v1\/events first/i.test(payload?.error || '')) {
+          try { rpcStream?.abort?.abort(); } catch (_) {}
+          rpcStream = null;
+          const reopened = await connectRpc(dispatchToTab);
+          if (reopened) {
+            res = await requestAttach();
+            payload = await res.json().catch(() => ({}));
+          }
+        }
+        const routeBound = res.ok && payload?.notebookId
+          ? await rememberNotebookTab(payload.notebookId, sender?.tab?.id)
+          : false;
+        if (res.ok) payload.routeBound = routeBound;
+        sendResponse({
+          ok: res.ok,
+          result: res.ok ? payload : null,
+          error: res.ok ? null : (payload?.error || `attach returned HTTP ${res.status}`),
+        });
       } else if (msg?.cmd === 'serve-detach') {
         const port = await findServePort();
         const token = await getServeToken();
@@ -386,6 +511,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             body: JSON.stringify({ notebookId: msg.notebookId }),
           }).catch(() => {});
         }
+        await forgetNotebookTab(String(msg.notebookId || ''));
         sendResponse({ ok: true });
       } else if (msg?.cmd === 'serve-materialise') {
         const port = await findServePort();
